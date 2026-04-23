@@ -1,0 +1,6 @@
+pywin32>=306          # 하나증권 COM API 연동 (Windows 필수)
+pandas>=2.0.0
+numpy>=1.24.0
+pyyaml>=6.0
+schedule>=1.2.0
+python-dotenv>=1.0.0

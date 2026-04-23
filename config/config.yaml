@@ -1,0 +1,44 @@
+# 하나증권 1Q Open API 설정
+api:
+  account_no: "YOUR_ACCOUNT_NO"      # 계좌번호 (예: 12345678-01)
+  account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
+  is_mock: true                       # true: 모의투자, false: 실계좌
+
+# CME 호주달러 선물 (6A) 설정
+symbol:
+  code: "6A"                          # CME 호주달러 선물 코드
+  exchange: "CME"
+  contract_month: ""                  # 비워두면 최근월물 자동 선택 (예: "202506")
+  tick_size: 0.0001                   # 최소가격변동단위
+  tick_value: 10.0                    # 틱당 가치 (USD) - 6A: 1틱 = $10
+  contract_size: 100000               # 계약당 호주달러 수량
+
+# Donchian Breakout 전략 설정
+strategy:
+  name: "donchian_breakout"
+  timeframe: "1D"                     # 봉 단위: 1D(일봉), 4H, 1H, 30M
+  donchian_entry_period: 20           # 진입 채널 기간 (20일 고/저)
+  donchian_exit_period: 10            # 청산 채널 기간 (10일 고/저)
+  atr_period: 14                      # ATR 계산 기간
+  atr_multiplier: 2.0                 # 손절 ATR 배수 (손절 = 진입가 ± 2*ATR)
+
+# 리스크 관리 설정
+risk:
+  account_equity: 10000000            # 계좌 자산 (원화, 예: 1천만원)
+  risk_per_trade_pct: 1.0             # 1회 거래 리스크 (계좌의 1%)
+  max_positions: 3                    # 최대 동시 포지션 수
+  daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
+  max_contracts_per_trade: 5          # 1회 최대 계약 수
+
+# 실행 설정
+execution:
+  check_interval_sec: 60              # 전략 체크 주기 (초)
+  order_type: "MARKET"                # MARKET: 시장가, LIMIT: 지정가
+  slippage_ticks: 1                   # 예상 슬리피지 (틱)
+
+# 로깅 설정
+logging:
+  level: "INFO"                       # DEBUG, INFO, WARNING, ERROR
+  log_dir: "logs"
+  max_file_size_mb: 10
+  backup_count: 5
