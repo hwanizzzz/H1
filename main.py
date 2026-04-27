@@ -25,6 +25,7 @@ from typing import Optional
 from api.hana_api import HanaAPI, ORDER_BUY, ORDER_SELL
 from strategy.donchian_breakout import DonchianBreakoutStrategy
 from strategy.ma_crossover import MACrossoverStrategy
+from strategy.adaptive_trend import AdaptiveTrendStrategy
 from strategy.base_strategy import Signal
 from risk.risk_manager import RiskManager
 from utils.data_handler import DataHandler, OHLCVBar
@@ -73,8 +74,25 @@ class TradingEngine:
         self.contract_month = sym_cfg.get("contract_month", "")
 
         # ── 전략 선택 ─────────────────────────────────────────────────────────
-        strat_name = strat_cfg.get("name", "donchian_breakout")
-        if strat_name == "donchian_breakout":
+        strat_name = strat_cfg.get("name", "adaptive_trend")
+        if strat_name == "adaptive_trend":
+            at_cfg = strat_cfg.get("adaptive_trend", {})
+            self.strategy = AdaptiveTrendStrategy(
+                ema_trend_period = at_cfg.get("ema_trend_period", 200),
+                donchian_period  = at_cfg.get("donchian_period", 20),
+                adx_period       = at_cfg.get("adx_period", 14),
+                adx_threshold    = at_cfg.get("adx_threshold", 20.0),
+                atr_period       = at_cfg.get("atr_period", 14),
+                atr_avg_period   = at_cfg.get("atr_avg_period", 50),
+                atr_ratio_min    = at_cfg.get("atr_ratio_min", 0.7),
+                rsi_period       = at_cfg.get("rsi_period", 14),
+                rsi_long_max     = at_cfg.get("rsi_long_max", 75.0),
+                rsi_short_min    = at_cfg.get("rsi_short_min", 25.0),
+                initial_stop_atr = at_cfg.get("initial_stop_atr", 2.0),
+                chandelier_atr   = at_cfg.get("chandelier_atr", 3.0),
+                partial_take_r   = at_cfg.get("partial_take_r", 2.0),
+            )
+        elif strat_name == "donchian_breakout":
             self.strategy = DonchianBreakoutStrategy(
                 entry_period   = strat_cfg["donchian_entry_period"],
                 exit_period    = strat_cfg["donchian_exit_period"],

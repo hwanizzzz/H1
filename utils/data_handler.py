@@ -85,16 +85,18 @@ class DataHandler:
     # ── 지표 계산 ──────────────────────────────────────────────
 
     def donchian_high(self, period: int) -> Optional[float]:
-        """최근 period 봉의 최고가 (진입 롱 기준선)"""
-        if len(self.bars) < period:
+        """직전 period 봉의 최고가 (현재 봉 제외 - 표준 Turtle 컨벤션).
+        오늘 close > donchian_high(N) → 신고가 돌파 신호.
+        """
+        if len(self.bars) < period + 1:
             return None
-        return max(b.high for b in list(self.bars)[-period:])
+        return max(b.high for b in list(self.bars)[-period - 1:-1])
 
     def donchian_low(self, period: int) -> Optional[float]:
-        """최근 period 봉의 최저가 (진입 숏 기준선)"""
-        if len(self.bars) < period:
+        """직전 period 봉의 최저가 (현재 봉 제외)."""
+        if len(self.bars) < period + 1:
             return None
-        return min(b.low for b in list(self.bars)[-period:])
+        return min(b.low for b in list(self.bars)[-period - 1:-1])
 
     def atr(self, period: int = 14) -> Optional[float]:
         """Average True Range"""
@@ -119,6 +121,44 @@ class DataHandler:
         for c in closes[-period + 1:]:
             ema_val = c * k + ema_val * (1 - k)
         return float(ema_val)
+
+    def rsi(self, period: int = 14) -> Optional[float]:
+        """RSI (Relative Strength Index) - Wilder's smoothing"""
+        closes = self.get_closes()
+        if len(closes) < period + 1:
+            return None
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0.0)
+        losses = np.where(deltas < 0, -deltas, 0.0)
+
+        avg_gain = float(np.mean(gains[:period]))
+        avg_loss = float(np.mean(losses[:period]))
+
+        for i in range(period, len(deltas)):
+            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return float(100.0 - 100.0 / (1.0 + rs))
+
+    def sma(self, period: int) -> Optional[float]:
+        closes = self.get_closes()
+        if len(closes) < period:
+            return None
+        return float(np.mean(closes[-period:]))
+
+    def highest_close_since_entry(self, lookback: int) -> Optional[float]:
+        """최근 lookback봉 동안의 최고 종가 (Chandelier Exit용)"""
+        if len(self.bars) < lookback:
+            return None
+        return max(b.high for b in list(self.bars)[-lookback:])
+
+    def lowest_close_since_entry(self, lookback: int) -> Optional[float]:
+        if len(self.bars) < lookback:
+            return None
+        return min(b.low for b in list(self.bars)[-lookback:])
 
     def adx(self, period: int = 14) -> Optional[float]:
         """ADX (Average Directional Index) - 추세 강도"""

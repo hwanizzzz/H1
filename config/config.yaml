@@ -13,14 +13,38 @@ symbol:
   tick_value: 10.0                    # 틱당 가치 (USD) - 6A: 1틱 = $10
   contract_size: 100000               # 계약당 호주달러 수량
 
-# Donchian Breakout 전략 설정
+# 전략 설정
+# ─────────────────────────────────────────────────────────────────────
+# 사용 가능한 전략:
+#   - adaptive_trend     : (권장/기본) 4중 필터 적응형 추세 추종
+#                           CME 6A 일봉 백테스트 기준 최고 수익률
+#   - donchian_breakout  : 터틀 트레이딩 변형
+#   - ma_crossover       : EMA 골든/데드크로스 + ADX 필터
 strategy:
-  name: "donchian_breakout"
+  name: "adaptive_trend"
   timeframe: "1D"                     # 봉 단위: 1D(일봉), 4H, 1H, 30M
-  donchian_entry_period: 20           # 진입 채널 기간 (20일 고/저)
-  donchian_exit_period: 10            # 청산 채널 기간 (10일 고/저)
-  atr_period: 14                      # ATR 계산 기간
-  atr_multiplier: 2.0                 # 손절 ATR 배수 (손절 = 진입가 ± 2*ATR)
+
+  # 호주달러 선물 최적화 파라미터 (백테스트로 검증된 값)
+  adaptive_trend:
+    ema_trend_period: 200             # 장기 추세 필터
+    donchian_period: 20               # 진입 채널 (신고가/신저가 돌파)
+    adx_period: 14
+    adx_threshold: 20.0               # 횡보장 진입 차단 임계값
+    atr_period: 14
+    atr_avg_period: 50                # ATR 장기 평균
+    atr_ratio_min: 0.7                # 변동성 사망 구간 회피
+    rsi_period: 14
+    rsi_long_max: 75.0                # 과열 추격매수 차단
+    rsi_short_min: 25.0
+    initial_stop_atr: 2.0             # 초기 손절 = 2 × ATR (= 1R)
+    chandelier_atr: 3.0               # 추적 손절 = 최고가 - 3 × ATR
+    partial_take_r: 2.0               # +2R 도달 시 BE 이동
+
+  # 보조 전략 (name 변경 시 사용)
+  donchian_entry_period: 20
+  donchian_exit_period: 10
+  atr_period: 14
+  atr_multiplier: 2.0
 
 # 리스크 관리 설정
 risk:
