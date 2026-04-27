@@ -1,10 +1,34 @@
 import pandas as pd
 import numpy as np
 from collections import deque
+from datetime import datetime, timedelta
 from typing import Optional
 from utils.logger import setup_logger
 
 logger = setup_logger("data_handler")
+
+
+# 지원 봉 단위 → timedelta
+_TIMEFRAME_MAP = {
+    "1M":  timedelta(minutes=1),
+    "5M":  timedelta(minutes=5),
+    "15M": timedelta(minutes=15),
+    "30M": timedelta(minutes=30),
+    "1H":  timedelta(hours=1),
+    "4H":  timedelta(hours=4),
+    "1D":  timedelta(days=1),
+}
+
+
+def _bar_open_time(ts: datetime, tf: timedelta) -> datetime:
+    """타임스탬프를 봉 시작 시각으로 정규화."""
+    if tf >= timedelta(days=1):
+        return datetime(ts.year, ts.month, ts.day)
+    epoch = datetime(1970, 1, 1)
+    secs = int((ts - epoch).total_seconds())
+    period = int(tf.total_seconds())
+    aligned = secs - (secs % period)
+    return epoch + timedelta(seconds=aligned)
 
 
 class OHLCVBar:
@@ -27,28 +51,53 @@ class DataHandler:
     전략에 필요한 지표를 계산합니다.
     """
 
-    def __init__(self, symbol: str, max_bars: int = 500):
+    def __init__(self, symbol: str, max_bars: int = 500, timeframe: str = "1D"):
         self.symbol = symbol
         self.bars: deque[OHLCVBar] = deque(maxlen=max_bars)
         self._current_bar: Optional[OHLCVBar] = None
+        tf = _TIMEFRAME_MAP.get(timeframe.upper())
+        if tf is None:
+            raise ValueError(f"지원하지 않는 timeframe: {timeframe}")
+        self.timeframe = timeframe.upper()
+        self._tf_delta: timedelta = tf
 
     def add_bar(self, bar: OHLCVBar):
         """완성된 봉 추가 (API로부터 일봉 데이터 수신 시)"""
         self.bars.append(bar)
         logger.debug(f"봉 추가: {bar.timestamp} O={bar.open} H={bar.high} L={bar.low} C={bar.close}")
 
-    def update_tick(self, price: float, volume: float = 0.0, timestamp=None):
-        """실시간 틱 수신 시 현재 봉 업데이트"""
+    def update_tick(self, price: float, volume: float = 0.0, timestamp: Optional[datetime] = None):
+        """
+        실시간 틱 수신 시 현재 봉 업데이트.
+        타임스탬프가 현재 봉의 timeframe 경계를 넘으면 현재 봉을 마감하고 새 봉을 시작한다.
+        """
+        if timestamp is None:
+            timestamp = datetime.now()
+
+        bar_open = _bar_open_time(timestamp, self._tf_delta)
+
         if self._current_bar is None:
-            self._current_bar = OHLCVBar(timestamp, price, price, price, price, volume)
-        else:
-            self._current_bar.high = max(self._current_bar.high, price)
-            self._current_bar.low = min(self._current_bar.low, price)
-            self._current_bar.close = price
-            self._current_bar.volume += volume
+            self._current_bar = OHLCVBar(bar_open, price, price, price, price, volume)
+            return
+
+        # 새로운 봉 구간으로 진입한 경우 → 이전 봉 확정
+        if bar_open > self._current_bar.timestamp:
+            self.bars.append(self._current_bar)
+            logger.debug(
+                f"봉 마감: {self._current_bar.timestamp} "
+                f"O={self._current_bar.open} H={self._current_bar.high} "
+                f"L={self._current_bar.low} C={self._current_bar.close}"
+            )
+            self._current_bar = OHLCVBar(bar_open, price, price, price, price, volume)
+            return
+
+        self._current_bar.high = max(self._current_bar.high, price)
+        self._current_bar.low = min(self._current_bar.low, price)
+        self._current_bar.close = price
+        self._current_bar.volume += volume
 
     def close_current_bar(self):
-        """현재 봉을 확정하고 저장"""
+        """현재 봉을 강제 확정 (예: 종료 시)"""
         if self._current_bar is not None:
             self.bars.append(self._current_bar)
             self._current_bar = None

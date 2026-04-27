@@ -112,6 +112,7 @@ class HanaAPI:
         self.is_mock = is_mock
 
         self._api = None
+        self._handler = None
         self._connected = False
         self._login_event = threading.Event()
 
@@ -124,6 +125,11 @@ class HanaAPI:
         # TR 응답 저장 (동기 요청용)
         self._tr_result: Dict = {}
         self._tr_event = threading.Event()
+        self._tr_lock = threading.Lock()
+
+        # 화면번호 카운터 (인스턴스 단위)
+        self._screen_lock = threading.Lock()
+        self._screen_no = 1000
 
     # ── 연결 / 로그인 ─────────────────────────────────────────────────────────
 
@@ -137,9 +143,10 @@ class HanaAPI:
             pythoncom.CoInitialize()
             self._api = win32com.client.Dispatch(HANA_PROGID)
 
-            # 이벤트 핸들러 연결
-            self._api = win32com.client.WithEvents(self._api, _HanaEventHandler)
-            self._api._handler._parent = self
+            # 이벤트 핸들러 연결: WithEvents는 핸들러 인스턴스를 반환하므로
+            # 별도 멤버에 보관해야 self._api(COM 객체) 가 보존된다.
+            self._handler = win32com.client.WithEvents(self._api, _HanaEventHandler)
+            self._handler._parent = self
 
             logger.info(f"하나증권 1Q API 초기화 완료 ({'모의투자' if self.is_mock else '실계좌'})")
 
@@ -169,6 +176,12 @@ class HanaAPI:
             except Exception:
                 pass
         self._connected = False
+        self._handler = None
+        if _COM_AVAILABLE:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
         logger.info("API 연결 해제")
 
     def is_connected(self) -> bool:
@@ -179,23 +192,29 @@ class HanaAPI:
     def get_daily_bars(self, symbol: str, count: int = 200) -> List[dict]:
         """
         해외선물 일봉 데이터 조회.
-        반환: [{"date": "20250101", "open": 0.65, "high": 0.66, "low": 0.64, "close": 0.655, "volume": 1234}, ...]
+        반환: [{"date": "20250101", ...}, ...] (시간 오름차순)
         """
         if not self._connected:
             logger.error("API 미연결 상태")
             return []
 
-        self._tr_event.clear()
-        self._api.SetInputValue("종목코드", symbol)
-        self._api.SetInputValue("조회수", str(count))
-        self._api.CommRqData(TR_OVERSEAS_FUTURES_CHART, TR_OVERSEAS_FUTURES_CHART,
-                             0, self._get_screen_no())
+        with self._tr_lock:
+            self._tr_result = {}
+            self._tr_event.clear()
+            self._api.SetInputValue("종목코드", symbol)
+            self._api.SetInputValue("조회수", str(count))
+            self._api.CommRqData(TR_OVERSEAS_FUTURES_CHART, TR_OVERSEAS_FUTURES_CHART,
+                                 0, self._get_screen_no())
 
-        if self._tr_event.wait(timeout=10):
-            return self._tr_result.get("bars", [])
-        else:
-            logger.error("일봉 데이터 조회 타임아웃")
-            return []
+            if not self._tr_event.wait(timeout=10):
+                logger.error("일봉 데이터 조회 타임아웃")
+                return []
+
+            bars = self._tr_result.get("bars", [])
+
+        # 1Q OpenAPI는 통상 최신→과거 순으로 반환되므로 시간 오름차순으로 정렬
+        bars.sort(key=lambda b: b.get("date", ""))
+        return bars
 
     def subscribe_realtime(self, symbol: str):
         """실시간 체결 데이터 구독"""
@@ -277,28 +296,32 @@ class HanaAPI:
         if not self._connected:
             return None
 
-        self._tr_event.clear()
-        self._api.SetInputValue("계좌번호", self.account_no)
-        self._api.SetInputValue("비밀번호", self.account_pw)
-        self._api.CommRqData(TR_ACCOUNT_BALANCE, TR_ACCOUNT_BALANCE,
-                             0, self._get_screen_no())
+        with self._tr_lock:
+            self._tr_result = {}
+            self._tr_event.clear()
+            self._api.SetInputValue("계좌번호", self.account_no)
+            self._api.SetInputValue("비밀번호", self.account_pw)
+            self._api.CommRqData(TR_ACCOUNT_BALANCE, TR_ACCOUNT_BALANCE,
+                                 0, self._get_screen_no())
 
-        if self._tr_event.wait(timeout=10):
-            return self._tr_result.get("account_info")
-        return None
+            if self._tr_event.wait(timeout=10):
+                return self._tr_result.get("account_info")
+            return None
 
     def get_positions(self) -> List[Position]:
         if not self._connected:
             return []
 
-        self._tr_event.clear()
-        self._api.SetInputValue("계좌번호", self.account_no)
-        self._api.SetInputValue("비밀번호", self.account_pw)
-        self._api.CommRqData(TR_POSITION, TR_POSITION, 0, self._get_screen_no())
+        with self._tr_lock:
+            self._tr_result = {}
+            self._tr_event.clear()
+            self._api.SetInputValue("계좌번호", self.account_no)
+            self._api.SetInputValue("비밀번호", self.account_pw)
+            self._api.CommRqData(TR_POSITION, TR_POSITION, 0, self._get_screen_no())
 
-        if self._tr_event.wait(timeout=10):
-            return self._tr_result.get("positions", [])
-        return []
+            if self._tr_event.wait(timeout=10):
+                return self._tr_result.get("positions", [])
+            return []
 
     def get_position(self, symbol: str) -> Optional[Position]:
         positions = self.get_positions()
@@ -309,13 +332,12 @@ class HanaAPI:
 
     # ── 내부 유틸 ─────────────────────────────────────────────────────────────
 
-    _screen_counter = 1000
-
     def _get_screen_no(self) -> str:
-        HanaAPI._screen_counter += 1
-        if HanaAPI._screen_counter > 9999:
-            HanaAPI._screen_counter = 1001
-        return str(HanaAPI._screen_counter)
+        with self._screen_lock:
+            self._screen_no += 1
+            if self._screen_no > 9999:
+                self._screen_no = 1001
+            return str(self._screen_no)
 
     def _on_login(self, err_code: int):
         if err_code == 0:

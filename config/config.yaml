@@ -29,6 +29,7 @@ risk:
   max_positions: 3                    # 최대 동시 포지션 수
   daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
   max_contracts_per_trade: 5          # 1회 최대 계약 수
+  usd_krw_rate: 1380.0                # USD/KRW 환율 (포지션 사이징 USD 환산용)
 
 # 실행 설정
 execution:

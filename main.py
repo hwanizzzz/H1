@@ -87,16 +87,23 @@ class TradingEngine:
             raise ValueError(f"알 수 없는 전략: {strat_name}")
 
         # ── 데이터 ────────────────────────────────────────────────────────────
-        self.data = DataHandler(self.symbol, max_bars=500)
+        self.data = DataHandler(
+            self.symbol,
+            max_bars=500,
+            timeframe=strat_cfg.get("timeframe", "1D"),
+        )
 
         # ── 리스크 매니저 ─────────────────────────────────────────────────────
-        self.risk = RiskManager(
+        risk_kwargs = dict(
             account_equity_krw      = risk_cfg["account_equity"],
             risk_per_trade_pct      = risk_cfg["risk_per_trade_pct"],
             daily_loss_limit_pct    = risk_cfg["daily_loss_limit_pct"],
             max_positions           = risk_cfg["max_positions"],
             max_contracts_per_trade = risk_cfg["max_contracts_per_trade"],
         )
+        if "usd_krw_rate" in risk_cfg:
+            risk_kwargs["usd_krw_rate"] = float(risk_cfg["usd_krw_rate"])
+        self.risk = RiskManager(**risk_kwargs)
 
         # ── 실행 설정 ─────────────────────────────────────────────────────────
         self.check_interval = exec_cfg["check_interval_sec"]
@@ -191,6 +198,12 @@ class TradingEngine:
             logger.warning("과거 데이터 수신 실패 - 실시간 데이터 누적 후 전략 실행")
             return
 
+        # 시간 오름차순 보장 (API가 최신→과거 순으로 반환할 수 있음)
+        try:
+            raw_bars = sorted(raw_bars, key=lambda b: b.get("date", ""))
+        except Exception:
+            pass
+
         for b in raw_bars:
             try:
                 ts = datetime.strptime(b["date"], "%Y%m%d")
@@ -261,11 +274,13 @@ class TradingEngine:
         can_open, reason = self.risk.can_open_position()
         if not can_open:
             logger.warning(f"포지션 진입 차단: {reason}")
+            self._reset_strategy_position()
             return
 
         contracts = self.risk.calc_contracts(signal.entry_price, signal.stop_loss)
         if contracts <= 0:
             logger.warning("계산된 계약 수가 0 - 진입 스킵")
+            self._reset_strategy_position()
             return
 
         if side == "LONG":
@@ -285,6 +300,13 @@ class TradingEngine:
             )
         else:
             logger.error(f"주문 실패: {result.msg}")
+            # 주문이 거절되었으므로 전략 내부 포지션 상태도 되돌린다.
+            self._reset_strategy_position()
+
+    def _reset_strategy_position(self):
+        """전략 내부의 포지션 상태를 NONE 으로 강제 복원 (주문 거절·차단 시)."""
+        if hasattr(self.strategy, "set_position"):
+            self.strategy.set_position("NONE", 0.0, 0.0)
 
     def _close_position(self, reason: str = ""):
         if self._position_side == "NONE" or self._position_qty == 0:
@@ -311,6 +333,15 @@ class TradingEngine:
             self._entry_price   = 0.0
         else:
             logger.error(f"청산 주문 실패: {result.msg}")
+            # 청산 주문이 거절된 경우 전략 내부도 다시 '보유' 상태로 동기화
+            if hasattr(self.strategy, "set_position"):
+                # ATR 추정 (None 방지)
+                atr = self.data.atr(14) or 0.001
+                if self._position_side == "LONG":
+                    stop = self._entry_price - 2 * atr
+                else:
+                    stop = self._entry_price + 2 * atr
+                self.strategy.set_position(self._position_side, self._entry_price, stop)
 
     # ── 주문 체결 콜백 ────────────────────────────────────────────────────────
 

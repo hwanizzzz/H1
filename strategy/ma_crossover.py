@@ -115,6 +115,12 @@ class MACrossoverStrategy(BaseStrategy):
         self._entry_price = 0.0
         self._stop_loss = 0.0
 
+    def set_position(self, side: str, entry_price: float, stop_loss: float):
+        """재시작 시 기존 포지션 복원 / 주문 거절 시 상태 되돌림"""
+        self._position = side
+        self._entry_price = entry_price
+        self._stop_loss = stop_loss
+
     @property
     def current_position(self) -> str:
         return self._position
