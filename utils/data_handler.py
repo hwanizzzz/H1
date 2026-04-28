@@ -1,10 +1,24 @@
 import pandas as pd
 import numpy as np
 from collections import deque
+from datetime import datetime, timedelta
 from typing import Optional
 from utils.logger import setup_logger
 
 logger = setup_logger("data_handler")
+
+
+# 타임프레임 → 초 환산 (UTC 기준 봉 분할에 사용)
+TIMEFRAME_SECONDS = {
+    "1M":  60,
+    "5M":  300,
+    "15M": 900,
+    "30M": 1800,
+    "1H":  3600,
+    "2H":  7200,
+    "4H":  14400,
+    "1D":  86400,
+}
 
 
 class OHLCVBar:
@@ -25,22 +39,55 @@ class DataHandler:
     """
     실시간 틱 데이터를 OHLCV 봉으로 집계하고
     전략에 필요한 지표를 계산합니다.
+
+    timeframe: "1M", "5M", "15M", "30M", "1H", "2H", "4H", "1D" 중 선택
+               분봉 모드에서는 update_tick()이 봉 경계에서 자동으로
+               close_current_bar()를 호출합니다.
     """
 
-    def __init__(self, symbol: str, max_bars: int = 500):
+    def __init__(self, symbol: str, max_bars: int = 500, timeframe: str = "1D"):
         self.symbol = symbol
+        self.timeframe = timeframe.upper()
+        if self.timeframe not in TIMEFRAME_SECONDS:
+            raise ValueError(f"지원하지 않는 timeframe: {timeframe}")
+        self.bar_seconds = TIMEFRAME_SECONDS[self.timeframe]
         self.bars: deque[OHLCVBar] = deque(maxlen=max_bars)
         self._current_bar: Optional[OHLCVBar] = None
+        self._current_bar_open_ts: Optional[datetime] = None
 
     def add_bar(self, bar: OHLCVBar):
-        """완성된 봉 추가 (API로부터 일봉 데이터 수신 시)"""
+        """완성된 봉 추가 (API로부터 과거 봉 수신 시)"""
         self.bars.append(bar)
-        logger.debug(f"봉 추가: {bar.timestamp} O={bar.open} H={bar.high} L={bar.low} C={bar.close}")
+        logger.debug(f"[{self.timeframe}] 봉 추가: {bar.timestamp} "
+                     f"O={bar.open} H={bar.high} L={bar.low} C={bar.close}")
+
+    def _bar_open_time(self, ts: datetime) -> datetime:
+        """타임스탬프를 timeframe 경계로 정규화 (UTC 기준)."""
+        if ts is None:
+            ts = datetime.utcnow()
+        # epoch 기준으로 bar_seconds 단위로 절단
+        epoch = ts.timestamp()
+        bucket = int(epoch // self.bar_seconds) * self.bar_seconds
+        return datetime.utcfromtimestamp(bucket)
 
     def update_tick(self, price: float, volume: float = 0.0, timestamp=None):
-        """실시간 틱 수신 시 현재 봉 업데이트"""
-        if self._current_bar is None:
-            self._current_bar = OHLCVBar(timestamp, price, price, price, price, volume)
+        """실시간 틱 수신 시 현재 봉 업데이트.
+        timeframe 경계를 넘으면 이전 봉을 자동 확정하고 새 봉 시작.
+        """
+        if timestamp is None:
+            timestamp = datetime.utcnow()
+
+        bucket_open = self._bar_open_time(timestamp)
+
+        # 새 봉 시작 (또는 첫 틱)
+        if self._current_bar is None or bucket_open != self._current_bar_open_ts:
+            # 기존 봉이 있으면 확정 후 저장
+            if self._current_bar is not None:
+                self.bars.append(self._current_bar)
+                logger.debug(f"[{self.timeframe}] 봉 자동확정: "
+                             f"{self._current_bar.timestamp} C={self._current_bar.close}")
+            self._current_bar = OHLCVBar(bucket_open, price, price, price, price, volume)
+            self._current_bar_open_ts = bucket_open
         else:
             self._current_bar.high = max(self._current_bar.high, price)
             self._current_bar.low = min(self._current_bar.low, price)
@@ -48,10 +95,11 @@ class DataHandler:
             self._current_bar.volume += volume
 
     def close_current_bar(self):
-        """현재 봉을 확정하고 저장"""
+        """현재 봉을 강제로 확정하고 저장 (보통은 update_tick이 자동 처리)."""
         if self._current_bar is not None:
             self.bars.append(self._current_bar)
             self._current_bar = None
+            self._current_bar_open_ts = None
 
     def to_dataframe(self) -> pd.DataFrame:
         if not self.bars:

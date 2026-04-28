@@ -8,51 +8,93 @@ api:
 symbol:
   code: "6A"                          # CME 호주달러 선물 코드
   exchange: "CME"
-  contract_month: ""                  # 비워두면 최근월물 자동 선택 (예: "202506")
+  contract_month: ""                  # 비워두면 최근월물 자동 선택 (예: "M26")
   tick_size: 0.0001                   # 최소가격변동단위
   tick_value: 10.0                    # 틱당 가치 (USD) - 6A: 1틱 = $10
   contract_size: 100000               # 계약당 호주달러 수량
 
+# ═══════════════════════════════════════════════════════════════════════════
 # 전략 설정
-# ─────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────
 # 사용 가능한 전략:
-#   - adaptive_trend     : (권장/기본) 4중 필터 적응형 추세 추종
-#                           CME 6A 일봉 백테스트 기준 최고 수익률
-#   - donchian_breakout  : 터틀 트레이딩 변형
-#   - ma_crossover       : EMA 골든/데드크로스 + ADX 필터
+#   - multi_tf_aggressive ⭐ : Tier 3 어그레시브 (4H+1H 멀티TF + 4단 피라미딩)
+#                              자본 3,000만원 이하 + 공격적 운용 시 권장
+#   - adaptive_trend         : 안정형 4중 필터 추세 추종 (일봉, 자본 1억+ 권장)
+#   - donchian_breakout      : 터틀 트레이딩 변형
+#   - ma_crossover           : EMA 골든/데드크로스 + ADX 필터
+# ═══════════════════════════════════════════════════════════════════════════
 strategy:
-  name: "adaptive_trend"
-  timeframe: "1D"                     # 봉 단위: 1D(일봉), 4H, 1H, 30M
+  name: "multi_tf_aggressive"
 
-  # 호주달러 선물 최적화 파라미터 (백테스트로 검증된 값)
-  adaptive_trend:
-    ema_trend_period: 200             # 장기 추세 필터
-    donchian_period: 20               # 진입 채널 (신고가/신저가 돌파)
-    adx_period: 14
-    adx_threshold: 20.0               # 횡보장 진입 차단 임계값
+  # ── Tier 3 어그레시브 (멀티TF + 피라미딩) ────────────────────────────
+  multi_tf_aggressive:
+    # 4H 추세 필터
+    trend_ema_fast: 50
+    trend_ema_slow: 200
+    trend_adx_period: 14
+    trend_adx_threshold: 18.0         # Tier 3는 18로 완화 (빈도↑)
     atr_period: 14
-    atr_avg_period: 50                # ATR 장기 평균
-    atr_ratio_min: 0.7                # 변동성 사망 구간 회피
-    rsi_period: 14
-    rsi_long_max: 75.0                # 과열 추격매수 차단
-    rsi_short_min: 25.0
-    initial_stop_atr: 2.0             # 초기 손절 = 2 × ATR (= 1R)
-    chandelier_atr: 3.0               # 추적 손절 = 최고가 - 3 × ATR
-    partial_take_r: 2.0               # +2R 도달 시 BE 이동
 
-  # 보조 전략 (name 변경 시 사용)
+    # 1H 진입 트리거
+    entry_donchian_period: 20
+    entry_rsi_period: 14
+    rsi_long_max: 75.0
+    rsi_short_min: 25.0
+
+    # 손절·익절
+    initial_stop_atr: 1.5             # 초기 손절 = 1.5 × ATR(4H) (= 1R)
+    chandelier_atr: 3.0               # 추적 손절 (부분익절 후 적용)
+    partial_take_r: 3.0               # +3R 도달 시 부분 익절
+    partial_close_pct: 0.5            # 50% 청산, 50% 추적
+
+    # 피라미딩 (Turtle 변형)
+    pyramid_enabled: true
+    pyramid_max_units: 4              # 최대 4단까지
+    pyramid_step_atr: 0.5             # +0.5×ATR(4H) 마다 1단 추가
+
+  # ── 안정형 (일봉) ──────────────────────────────────────────────────
+  adaptive_trend:
+    ema_trend_period: 200
+    donchian_period: 20
+    adx_period: 14
+    adx_threshold: 20.0
+    atr_period: 14
+    atr_avg_period: 50
+    atr_ratio_min: 0.7
+    rsi_period: 14
+    rsi_long_max: 75.0
+    rsi_short_min: 25.0
+    initial_stop_atr: 2.0
+    chandelier_atr: 3.0
+    partial_take_r: 2.0
+
+  # 보조 전략
   donchian_entry_period: 20
   donchian_exit_period: 10
   atr_period: 14
   atr_multiplier: 2.0
 
-# 리스크 관리 설정
+# ═══════════════════════════════════════════════════════════════════════════
+# 리스크 관리 (Tier 3 어그레시브 프리셋)
+# ─────────────────────────────────────────────────────────────────────────
+# Tier 1 (마일드)   : risk_per_trade_pct=2, daily_circuit_breaker_pct=4
+# Tier 2 (모더레이트): risk_per_trade_pct=2.5, daily_circuit_breaker_pct=5
+# Tier 3 (어그레시브): risk_per_trade_pct=3, daily_circuit_breaker_pct=6 (현재)
+# ═══════════════════════════════════════════════════════════════════════════
 risk:
-  account_equity: 10000000            # 계좌 자산 (원화, 예: 1천만원)
-  risk_per_trade_pct: 1.0             # 1회 거래 리스크 (계좌의 1%)
-  max_positions: 3                    # 최대 동시 포지션 수
-  daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
-  max_contracts_per_trade: 5          # 1회 최대 계약 수
+  account_equity: 30000000            # 자본 3,000만원 (KRW)
+  risk_per_trade_pct: 3.0             # Tier 3: 1회 거래 3% 리스크
+  max_positions: 1                    # 단일 종목이므로 1
+  daily_loss_limit_pct: 4.0           # 일일 손실 4% 도달 시 신규 진입 차단
+  max_contracts_per_trade: 8          # 1단 + 피라미드 최대 합산 계약 수
+
+  # ── 회로차단기 (Tier 3 어그레시브 안전장치) ────────────────────────
+  daily_circuit_breaker_pct: 6.0      # 일일 -6% 도달 시 강제청산 + 24h 정지
+  weekly_drawdown_limit_pct: 12.0     # 주간 -12% 도달 시 3일 정지
+  consecutive_loss_halt: 5            # 5연패 시 24h 정지
+
+  # 피라미드 사이즈 감쇠 (1단=100%, 2단=75%, 3단=50%, 4단=50%)
+  pyramid_size_decay: [1.0, 0.75, 0.5, 0.5]
 
 # 실행 설정
 execution:

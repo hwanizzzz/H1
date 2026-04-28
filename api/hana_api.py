@@ -53,9 +53,16 @@ EXCHANGE_CME = "CME"
 
 # TR 코드 (하나증권 1Q API)
 TR_OVERSEAS_FUTURES_CHART = "OFHDFUT0"   # 해외선물 일봉 데이터
+TR_OVERSEAS_FUTURES_MIN   = "OFHDFUT2"   # 해외선물 분봉 데이터 (1H/4H/30M 등)
 TR_OVERSEAS_FUTURES_TICK  = "OFHDFUT1"   # 해외선물 틱 데이터
 TR_ACCOUNT_BALANCE        = "OFHACNT0"   # 해외선물 잔고 조회
 TR_POSITION               = "OFHPOSI0"   # 포지션 조회
+
+# 타임프레임 → 분 단위 환산 (Hana 분봉 TR의 "주기" 입력값)
+TIMEFRAME_TO_MINUTES = {
+    "1M": 1, "5M": 5, "15M": 15, "30M": 30,
+    "1H": 60, "2H": 120, "4H": 240,
+}
 
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
@@ -195,6 +202,59 @@ class HanaAPI:
             return self._tr_result.get("bars", [])
         else:
             logger.error("일봉 데이터 조회 타임아웃")
+            return []
+
+    def get_bars(self, symbol: str, timeframe: str = "1D", count: int = 200) -> List[dict]:
+        """
+        해외선물 봉 데이터 조회 (일봉 + 분봉 통합 인터페이스).
+
+        Args:
+            symbol:    종목코드 (예: "6AH26")
+            timeframe: "1D" 일봉 / "1M","5M","15M","30M","1H","2H","4H" 분봉
+            count:     조회 봉 수
+
+        반환: [{"timestamp": datetime, "open":..., "high":..., "low":..., "close":..., "volume":...}, ...]
+        """
+        timeframe = timeframe.upper()
+
+        # 일봉은 기존 메서드 재사용 후 timestamp 정규화
+        if timeframe == "1D":
+            raw = self.get_daily_bars(symbol, count)
+            normalized = []
+            for b in raw:
+                try:
+                    ts = datetime.strptime(b["date"], "%Y%m%d")
+                except Exception:
+                    continue
+                normalized.append({
+                    "timestamp": ts,
+                    "open": b["open"], "high": b["high"],
+                    "low": b["low"], "close": b["close"],
+                    "volume": b["volume"],
+                })
+            return normalized
+
+        # 분봉
+        if timeframe not in TIMEFRAME_TO_MINUTES:
+            logger.error(f"지원하지 않는 timeframe: {timeframe}")
+            return []
+
+        if not self._connected:
+            logger.error("API 미연결 상태")
+            return []
+
+        minutes = TIMEFRAME_TO_MINUTES[timeframe]
+        self._tr_event.clear()
+        self._api.SetInputValue("종목코드", symbol)
+        self._api.SetInputValue("주기", str(minutes))
+        self._api.SetInputValue("조회수", str(count))
+        self._api.CommRqData(TR_OVERSEAS_FUTURES_MIN, TR_OVERSEAS_FUTURES_MIN,
+                             0, self._get_screen_no())
+
+        if self._tr_event.wait(timeout=15):
+            return self._tr_result.get("bars", [])
+        else:
+            logger.error(f"{timeframe} 분봉 데이터 조회 타임아웃")
             return []
 
     def subscribe_realtime(self, symbol: str):
@@ -339,6 +399,11 @@ class HanaAPI:
                 self._tr_result = {"bars": bars}
                 self._tr_event.set()
 
+            elif tr_code == TR_OVERSEAS_FUTURES_MIN:
+                bars = self._parse_minute_bars(tr_code)
+                self._tr_result = {"bars": bars}
+                self._tr_event.set()
+
             elif tr_code == TR_ACCOUNT_BALANCE:
                 info = self._parse_account_info(tr_code)
                 self._tr_result = {"account_info": info}
@@ -396,6 +461,32 @@ class HanaAPI:
                 })
         except Exception as e:
             logger.error(f"일봉 파싱 오류: {e}")
+        return bars
+
+    def _parse_minute_bars(self, tr_code: str) -> List[dict]:
+        """분봉 TR 응답 파싱.
+        반환 형식: [{"timestamp": datetime, "open":..., ...}]
+        Hana 분봉 TR이 "체결시간"을 "YYYYMMDDHHMMSS"로 반환한다고 가정.
+        """
+        bars = []
+        try:
+            count = self._api.GetRepeatCnt(tr_code, "분봉데이터")
+            for i in range(count):
+                ts_str = self._api.GetCommData(tr_code, "분봉데이터", i, "체결시간").strip()
+                try:
+                    ts = datetime.strptime(ts_str[:14], "%Y%m%d%H%M%S")
+                except Exception:
+                    ts = datetime.strptime(ts_str[:8], "%Y%m%d")
+                bars.append({
+                    "timestamp": ts,
+                    "open":      float(self._api.GetCommData(tr_code, "분봉데이터", i, "시가")),
+                    "high":      float(self._api.GetCommData(tr_code, "분봉데이터", i, "고가")),
+                    "low":       float(self._api.GetCommData(tr_code, "분봉데이터", i, "저가")),
+                    "close":     float(self._api.GetCommData(tr_code, "분봉데이터", i, "현재가")),
+                    "volume":    int(self._api.GetCommData(tr_code, "분봉데이터", i, "거래량")),
+                })
+        except Exception as e:
+            logger.error(f"분봉 파싱 오류: {e}")
         return bars
 
     def _parse_account_info(self, tr_code: str) -> AccountInfo:

@@ -100,8 +100,12 @@ class AdaptiveTrendStrategy(BaseStrategy):
     def get_min_bars_required(self) -> int:
         return max(self.ema_trend_period, self.atr_avg_period, self.donchian_period + 1) + 5
 
+    def get_required_timeframes(self):
+        return ["1D"]
+
     def on_bar(self, data) -> TradeSignal:
-        if data.bar_count() < self.get_min_bars_required():
+        data = self._resolve_data(data, "1D")
+        if data is None or data.bar_count() < self.get_min_bars_required():
             return TradeSignal(Signal.NONE)
 
         close = data.latest_close()
