@@ -37,7 +37,7 @@ SYMBOL_MAP = {
     "6C": "Canada",
 }
 
-START_DATE = "2022-12-15"   # buffer for EMA200 warmup
+START_DATE = "2013-06-01"   # buffer for EMA200 warmup, ~10년치
 END_DATE   = "2024-12-31"
 
 

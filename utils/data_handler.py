@@ -208,6 +208,16 @@ class DataHandler:
             return None
         return min(b.low for b in list(self.bars)[-lookback:])
 
+    def bollinger_bands(self, period: int = 20, num_stddev: float = 2.0):
+        """Return (upper, middle, lower) Bollinger Bands."""
+        closes = self.get_closes()
+        if len(closes) < period:
+            return None, None, None
+        window = closes[-period:]
+        mid = float(np.mean(window))
+        std = float(np.std(window, ddof=0))
+        return mid + num_stddev * std, mid, mid - num_stddev * std
+
     def adx(self, period: int = 14) -> Optional[float]:
         """ADX (Average Directional Index) - 추세 강도"""
         bars = list(self.bars)

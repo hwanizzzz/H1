@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 from strategy.base_strategy import Signal
 from strategy.adaptive_trend import AdaptiveTrendStrategy
 from strategy.multi_tf_aggressive import MultiTFAggressiveStrategy
+from strategy.ramr import RAMRStrategy
 from utils.data_handler import DataHandler, OHLCVBar, TIMEFRAME_SECONDS
 
 
@@ -37,10 +38,16 @@ class SymbolSpec:
     tick_value: float
 
 SYMBOL_SPECS: Dict[str, SymbolSpec] = {
-    "6A": SymbolSpec("6A", "AUD/USD", 0.0001,  10.00),
-    "6E": SymbolSpec("6E", "EUR/USD", 0.00005,  6.25),
-    "6B": SymbolSpec("6B", "GBP/USD", 0.0001,   6.25),
-    "6C": SymbolSpec("6C", "CAD/USD", 0.0001,  10.00),
+    # Standard E-mini FX futures
+    "6A": SymbolSpec("6A", "AUD/USD",       0.0001,  10.00),
+    "6E": SymbolSpec("6E", "EUR/USD",       0.00005,  6.25),
+    "6B": SymbolSpec("6B", "GBP/USD",       0.0001,   6.25),
+    "6C": SymbolSpec("6C", "CAD/USD",       0.0001,  10.00),
+    # Micro FX futures (1/10 size of standard) — for finer sizing
+    "M6A": SymbolSpec("M6A", "Micro AUD/USD", 0.0001,  1.00),
+    "M6E": SymbolSpec("M6E", "Micro EUR/USD", 0.0001,  1.25),
+    "M6B": SymbolSpec("M6B", "Micro GBP/USD", 0.0001,  0.625),
+    "M6C": SymbolSpec("M6C", "Micro CAD/USD", 0.0001,  1.00),
 }
 
 
@@ -99,6 +106,9 @@ def build_strategy(name: str):
     if name == "multi_tf_aggressive":
         s = MultiTFAggressiveStrategy()
         return s, ["4H", "1H"], "1H"
+    if name == "ramr":
+        s = RAMRStrategy()
+        return s, ["1D"], "1D"
     raise ValueError(f"unknown strategy: {name}")
 
 
@@ -436,12 +446,16 @@ def build_default_channels(total_equity_usd: float,
 
 
 def load_bars_for_strategy(symbol: str, strategy_name: str, data_dir: str) -> Dict[str, List[OHLCVBar]]:
-    """전략이 요구하는 모든 TF에 대해 봉 데이터 로드 (필요 시 합성)."""
+    """전략이 요구하는 모든 TF에 대해 봉 데이터 로드 (필요 시 합성).
+    Micro symbol(M6A/M6E/...)은 동일 가격으로 standard 종목 CSV를 공유.
+    """
     _, required_tfs, input_tf = build_strategy(strategy_name)
+    # Micro symbol → use underlying standard symbol's price data
+    data_symbol = symbol[1:] if symbol.startswith("M") and symbol[1:] in ("6A", "6E", "6B", "6C") else symbol
     if input_tf == "1D":
-        path = os.path.join(data_dir, f"{symbol}_daily.csv")
+        path = os.path.join(data_dir, f"{data_symbol}_daily.csv")
     elif input_tf == "1H":
-        path = os.path.join(data_dir, f"{symbol}_1h.csv")
+        path = os.path.join(data_dir, f"{data_symbol}_1h.csv")
     else:
         raise ValueError(f"unsupported input_tf {input_tf}")
 
