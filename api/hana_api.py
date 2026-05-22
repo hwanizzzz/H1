@@ -183,9 +183,11 @@ class HanaAPI:
 
     # ── 시세 데이터 조회 ─────────────────────────────────────────────────────
 
-    def get_daily_bars(self, symbol: str, count: int = 200) -> List[dict]:
+    def get_daily_bars(self, symbol: str, count: int = 200,
+                       end_date: Optional[datetime] = None) -> List[dict]:
         """
         해외선물 일봉 데이터 조회.
+        end_date 지정 시 그 이전 봉을 거꾸로 count개 조회 (페이지네이션).
         반환: [{"date": "20250101", "open": 0.65, "high": 0.66, "low": 0.64, "close": 0.655, "volume": 1234}, ...]
         """
         if not self._connected:
@@ -195,6 +197,11 @@ class HanaAPI:
         self._tr_event.clear()
         self._api.SetInputValue("종목코드", symbol)
         self._api.SetInputValue("조회수", str(count))
+        if end_date is not None:
+            try:
+                self._api.SetInputValue("기준일자", end_date.strftime("%Y%m%d"))
+            except Exception as e:
+                logger.warning(f"기준일자 SetInputValue 실패 (필드명 확인 필요): {e}")
         self._api.CommRqData(TR_OVERSEAS_FUTURES_CHART, TR_OVERSEAS_FUTURES_CHART,
                              0, self._get_screen_no())
 
@@ -204,7 +211,8 @@ class HanaAPI:
             logger.error("일봉 데이터 조회 타임아웃")
             return []
 
-    def get_bars(self, symbol: str, timeframe: str = "1D", count: int = 200) -> List[dict]:
+    def get_bars(self, symbol: str, timeframe: str = "1D", count: int = 200,
+                 end_date: Optional[datetime] = None) -> List[dict]:
         """
         해외선물 봉 데이터 조회 (일봉 + 분봉 통합 인터페이스).
 
@@ -212,6 +220,8 @@ class HanaAPI:
             symbol:    종목코드 (예: "6AH26")
             timeframe: "1D" 일봉 / "1M","5M","15M","30M","1H","2H","4H" 분봉
             count:     조회 봉 수
+            end_date:  기준일자 (None=현재). 그 이전 봉을 거꾸로 count개 조회.
+                       페이지네이션 시 사용.
 
         반환: [{"timestamp": datetime, "open":..., "high":..., "low":..., "close":..., "volume":...}, ...]
         """
@@ -219,7 +229,7 @@ class HanaAPI:
 
         # 일봉은 기존 메서드 재사용 후 timestamp 정규화
         if timeframe == "1D":
-            raw = self.get_daily_bars(symbol, count)
+            raw = self.get_daily_bars(symbol, count, end_date=end_date)
             normalized = []
             for b in raw:
                 try:
@@ -248,6 +258,13 @@ class HanaAPI:
         self._api.SetInputValue("종목코드", symbol)
         self._api.SetInputValue("주기", str(minutes))
         self._api.SetInputValue("조회수", str(count))
+        if end_date is not None:
+            # 분봉 TR이 "기준일자" 입력을 받는 경우. 정확한 필드명은 API 매뉴얼 확인.
+            # 가능 대안: "기준일자", "조회종료일", "TO일자"
+            try:
+                self._api.SetInputValue("기준일자", end_date.strftime("%Y%m%d"))
+            except Exception as e:
+                logger.warning(f"기준일자 SetInputValue 실패 (필드명 확인 필요): {e}")
         self._api.CommRqData(TR_OVERSEAS_FUTURES_MIN, TR_OVERSEAS_FUTURES_MIN,
                              0, self._get_screen_no())
 
