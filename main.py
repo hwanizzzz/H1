@@ -25,6 +25,7 @@ from typing import Optional
 from api.hana_api import HanaAPI, ORDER_BUY, ORDER_SELL
 from strategy.donchian_breakout import DonchianBreakoutStrategy
 from strategy.ma_crossover import MACrossoverStrategy
+from strategy.mean_reversion import MeanReversionStrategy
 from strategy.base_strategy import Signal
 from risk.risk_manager import RiskManager
 from utils.data_handler import DataHandler, OHLCVBar
@@ -84,6 +85,11 @@ class TradingEngine:
             )
         elif strat_name == "ma_crossover":
             self.strategy = MACrossoverStrategy()
+        elif strat_name == "mean_reversion":
+            self.strategy = MeanReversionStrategy(
+                trend_filter_period = strat_cfg.get("trend_filter_period", 100),
+                atr_multiplier      = strat_cfg.get("atr_multiplier", 3.0),
+            )
         else:
             raise ValueError(f"알 수 없는 전략: {strat_name}")
 

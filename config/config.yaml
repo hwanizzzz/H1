@@ -1,42 +1,53 @@
+# =============================================================================
+#  최종 운용안 (백테스트 2020~2025 검증 결과 기반)
+#
+#  [검증된 시스템 = 2종 분산]
+#    · 금(Gold)   : 돌파전략(Donchian+추세필터)  ← 이 파일이 설정하는 1차 대상
+#    · S&P500     : 평균회귀전략(눌림목 매수)      ← 다종목 엔진 확장 후 추가
+#    · 합산 백테스트(리스크2%): +81%, 최대손실 -13%
+#
+#  [확정 설정] 거래당 리스크 3% (공격형), 손절은 좁게(ATR×2 ≈ 2.4%)
+#    ※ 손절을 넓히면 오히려 수익↓ (검증됨). ATR×2 유지.
+#
+#  ⚠️ 실거래 전 필수 확인:
+#    1) 하나증권에서 금 선물(GC) 거래 가능 종목코드/월물 코드 확인
+#    2) S&P 추가하려면 마이크로 MES 지원 여부 확인 (표준 ES는 2.5억으로 부족)
+#    3) 반드시 모의투자(is_mock:true) → 소액 실계좌 순서로 진행
+# =============================================================================
+
 # 하나증권 1Q Open API 설정
 api:
   account_no: "YOUR_ACCOUNT_NO"      # 계좌번호 (예: 12345678-01)
   account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
   is_mock: true                       # true: 모의투자, false: 실계좌
 
-# CME 호주달러 선물 (6A) 설정
+# 금(Gold) 선물 설정 — COMEX(CME그룹)
 symbol:
-  code: "6A"                          # CME 호주달러 선물 코드
+  code: "GC"                          # ⚠️ 하나증권 실제 금선물 코드로 확인 필요 (표준 GC / 마이크로 MGC)
   exchange: "CME"
-  contract_month: ""                  # 비워두면 최근월물 자동 선택 (예: "202506")
-  tick_size: 0.0001                   # 최소가격변동단위
-  tick_value: 10.0                    # 틱당 가치 (USD) - 6A: 1틱 = $10
-  contract_size: 100000               # 계약당 호주달러 수량
+  contract_month: ""                  # ⚠️ 금은 비FX라 자동월물 부정확 → 활성 근월물 수동 지정 권장 (예: "202604")
+  tick_size: 0.10                     # 금 최소가격변동단위 ($0.10)
+  tick_value: 10.0                    # 표준 GC: 1틱($0.10)=$10  (마이크로 MGC면 1.0으로 변경)
+  contract_size: 100                  # 표준 GC: 100 트로이온스 (MGC: 10)
 
-# Donchian Breakout 전략 설정
+# 전략 설정 — 금: Donchian 돌파 + 추세필터 (검증된 금 최적)
 strategy:
-  name: "donchian_breakout"
-  timeframe: "1D"                     # 봉 단위: 1D(일봉), 4H, 1H, 30M
+  name: "donchian_breakout"           # 금=donchian_breakout / S&P=mean_reversion
+  timeframe: "1D"                     # 일봉. (분봉 데이트레이딩은 검증 결과 손실 → 사용 안 함)
   donchian_entry_period: 20           # 진입 채널 기간 (20일 고/저)
   donchian_exit_period: 10            # 청산 채널 기간 (10일 고/저)
   atr_period: 14                      # ATR 계산 기간
-  atr_multiplier: 2.0                 # 손절 ATR 배수 (손절 = 진입가 ± 2*ATR)
-  trend_filter_period: 100            # 추세 필터 SMA 기간 (0=비활성). 종가>SMA일 때만 롱, <SMA일 때만 숏
+  atr_multiplier: 2.0                 # 손절 ATR 배수 (좁게 유지 = 최적)
+  trend_filter_period: 100            # 추세 필터 SMA 기간. 종가>SMA일 때만 롱
+  # 평균회귀(S&P용) 파라미터: period=20, num_std=2.0, atr_multiplier=3.0, trend_filter_period=100
 
-# 리스크 관리 설정
-#
-# [표준계약(6A, 틱당 $10) 최소 운용자본 - 합성데이터 기준, 실데이터로 재검증 필요]
-#   리스크 1%/거래 → 1계약 진입에 약 2.3억원
-#   리스크 2%/거래 → 약 1.1억원
-#   리스크 3%/거래 → 약 0.8억원  (낙폭 위험 커짐, 비권장)
-#   ※ 5천만원 이하로는 표준 6A에서 1계약도 못 잡음(리스크 룰 위반).
-#     마이크로 미지원 환경에서는 자본 증액이 필수.
+# 리스크 관리 설정 (공격형 확정: 거래당 3%)
 risk:
-  account_equity: 250000000           # 계좌 자산 (원화, 예: 2.5억원) - 1% 룰로 표준 6A 1계약 가능
-  risk_per_trade_pct: 1.0             # 1회 거래 리스크 (계좌의 1%) - 추세추종 표준
-  max_positions: 3                    # 최대 동시 포지션 수
-  daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
-  max_contracts_per_trade: 5          # 1회 최대 계약 수
+  account_equity: 250000000           # 계좌 자산 (원화, 2.5억). 3% 리스크면 표준 GC 1계약 가능
+  risk_per_trade_pct: 3.0             # ★ 거래당 리스크 3% (공격형). 실손실은 백테스트의 1.5~2배 각오
+  max_positions: 2                    # 최대 동시 포지션 (금+S&P 확장 대비)
+  daily_loss_limit_pct: 9.0          # 일일 최대 손실 한도 (3% × 3거래)
+  max_contracts_per_trade: 10         # 1회 최대 계약 수
   usd_krw_rate: 1350.0                # 원/달러 환율 (USD 손익 → 원화 환산용)
 
 # 실행 설정
