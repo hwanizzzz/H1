@@ -21,6 +21,7 @@ import yaml
 
 from strategy.donchian_breakout import DonchianBreakoutStrategy
 from strategy.ma_crossover import MACrossoverStrategy
+from strategy.mean_reversion import MeanReversionStrategy
 from backtest.engine import Backtester, format_report
 from backtest.data_loader import load_csv, generate_synthetic
 
@@ -37,6 +38,9 @@ def build_strategy(name: str, strat_cfg: dict, trend_override):
         )
     if name == "ma":
         return MACrossoverStrategy()
+    if name == "meanrev":
+        trend = 0 if trend_override is None else trend_override
+        return MeanReversionStrategy(trend_filter_period=trend)
     raise ValueError(f"알 수 없는 전략: {name}")
 
 
@@ -45,7 +49,7 @@ def main():
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--csv", help="일봉 CSV 경로")
     src.add_argument("--synthetic", action="store_true", help="합성 데이터로 엔진 점검")
-    p.add_argument("--strategy", default="donchian", choices=["donchian", "ma"])
+    p.add_argument("--strategy", default="donchian", choices=["donchian", "ma", "meanrev"])
     p.add_argument("--trend", type=int, default=None,
                    help="추세 필터 SMA 기간 덮어쓰기 (0=비활성)")
     p.add_argument("--config", default="config/config.yaml")
