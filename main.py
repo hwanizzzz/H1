@@ -76,10 +76,11 @@ class TradingEngine:
         strat_name = strat_cfg.get("name", "donchian_breakout")
         if strat_name == "donchian_breakout":
             self.strategy = DonchianBreakoutStrategy(
-                entry_period   = strat_cfg["donchian_entry_period"],
-                exit_period    = strat_cfg["donchian_exit_period"],
-                atr_period     = strat_cfg["atr_period"],
-                atr_multiplier = strat_cfg["atr_multiplier"],
+                entry_period        = strat_cfg["donchian_entry_period"],
+                exit_period         = strat_cfg["donchian_exit_period"],
+                atr_period          = strat_cfg["atr_period"],
+                atr_multiplier      = strat_cfg["atr_multiplier"],
+                trend_filter_period = strat_cfg.get("trend_filter_period", 0),
             )
         elif strat_name == "ma_crossover":
             self.strategy = MACrossoverStrategy()
@@ -92,10 +93,13 @@ class TradingEngine:
         # ── 리스크 매니저 ─────────────────────────────────────────────────────
         self.risk = RiskManager(
             account_equity_krw      = risk_cfg["account_equity"],
+            tick_size               = sym_cfg["tick_size"],
+            tick_value              = sym_cfg["tick_value"],
             risk_per_trade_pct      = risk_cfg["risk_per_trade_pct"],
             daily_loss_limit_pct    = risk_cfg["daily_loss_limit_pct"],
             max_positions           = risk_cfg["max_positions"],
             max_contracts_per_trade = risk_cfg["max_contracts_per_trade"],
+            usd_krw_rate            = risk_cfg.get("usd_krw_rate", 1350.0),
         )
 
         # ── 실행 설정 ─────────────────────────────────────────────────────────
@@ -261,11 +265,13 @@ class TradingEngine:
         can_open, reason = self.risk.can_open_position()
         if not can_open:
             logger.warning(f"포지션 진입 차단: {reason}")
+            self._rollback_strategy()
             return
 
         contracts = self.risk.calc_contracts(signal.entry_price, signal.stop_loss)
         if contracts <= 0:
             logger.warning("계산된 계약 수가 0 - 진입 스킵")
+            self._rollback_strategy()
             return
 
         if side == "LONG":
@@ -285,6 +291,13 @@ class TradingEngine:
             )
         else:
             logger.error(f"주문 실패: {result.msg}")
+            self._rollback_strategy()
+
+    def _rollback_strategy(self):
+        """진입이 실제로 체결되지 않았을 때 전략 내부 포지션 상태를 되돌림 (desync 방지)"""
+        if self._position_side == "NONE" and hasattr(self.strategy, "reset_position"):
+            self.strategy.reset_position()
+            logger.info("진입 미체결 → 전략 포지션 상태 롤백")
 
     def _close_position(self, reason: str = ""):
         if self._position_side == "NONE" or self._position_qty == 0:

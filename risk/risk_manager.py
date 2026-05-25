@@ -13,11 +13,6 @@ from utils.logger import setup_logger
 
 logger = setup_logger("risk_manager")
 
-# CME 6A (호주달러 선물) 스펙
-AUD_TICK_SIZE  = 0.0001   # 최소 가격변동 단위
-AUD_TICK_VALUE = 10.0     # 1틱당 손익 (USD)
-AUD_POINT_VALUE = AUD_TICK_VALUE / AUD_TICK_SIZE   # = 100,000 (계약 단위)
-
 
 class RiskManager:
     """
@@ -27,11 +22,16 @@ class RiskManager:
       stop_usd     = stop_ticks × tick_value
       contracts    = floor(risk_amount_in_usd / stop_usd)
 
+    종목 스펙(tick_size/tick_value)은 config에서 주입받습니다. 6A·MES·MGC 등
+    어떤 CME 상품이든 해당 스펙만 넘기면 사이징·손익 계산이 맞습니다.
+
     account_equity는 원화 기준이므로 USD 환산이 필요합니다.
     usd_krw_rate를 주입하거나 주기적으로 갱신하세요.
     """
 
     def __init__(self, account_equity_krw: float,
+                 tick_size: float,
+                 tick_value: float,
                  risk_per_trade_pct: float = 1.0,
                  daily_loss_limit_pct: float = 3.0,
                  max_positions: int = 3,
@@ -39,6 +39,8 @@ class RiskManager:
                  usd_krw_rate: float = 1350.0):
 
         self.account_equity_krw = account_equity_krw
+        self.tick_size = tick_size
+        self.tick_value = tick_value
         self.risk_per_trade_pct = risk_per_trade_pct
         self.daily_loss_limit_pct = daily_loss_limit_pct
         self.max_positions = max_positions
@@ -63,7 +65,7 @@ class RiskManager:
             추천 계약 수 (0이면 거래 불가)
         """
         stop_distance = abs(entry_price - stop_loss)
-        if stop_distance < AUD_TICK_SIZE:
+        if stop_distance < self.tick_size:
             logger.warning(f"손절 거리가 너무 작음: {stop_distance:.5f}")
             return 0
 
@@ -74,8 +76,8 @@ class RiskManager:
         risk_usd = equity_usd * (self.risk_per_trade_pct / 100.0)
 
         # 1계약당 손실 USD
-        stop_ticks = stop_distance / AUD_TICK_SIZE
-        loss_per_contract_usd = stop_ticks * AUD_TICK_VALUE
+        stop_ticks = stop_distance / self.tick_size
+        loss_per_contract_usd = stop_ticks * self.tick_value
 
         if loss_per_contract_usd <= 0:
             return 0
@@ -131,8 +133,7 @@ class RiskManager:
 
     # ── 손익 계산 헬퍼 ────────────────────────────────────────────────────────
 
-    @staticmethod
-    def calc_pnl_usd(side: str, entry_price: float, exit_price: float,
+    def calc_pnl_usd(self, side: str, entry_price: float, exit_price: float,
                      contracts: int) -> float:
         """
         선물 손익 계산 (USD 기준).
@@ -144,8 +145,8 @@ class RiskManager:
             contracts:   계약 수
         """
         diff = exit_price - entry_price if side == "LONG" else entry_price - exit_price
-        ticks = diff / AUD_TICK_SIZE
-        return ticks * AUD_TICK_VALUE * contracts
+        ticks = diff / self.tick_size
+        return ticks * self.tick_value * contracts
 
     def calc_pnl_krw(self, side: str, entry_price: float, exit_price: float,
                      contracts: int) -> float:

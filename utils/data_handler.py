@@ -84,17 +84,35 @@ class DataHandler:
 
     # ── 지표 계산 ──────────────────────────────────────────────
 
-    def donchian_high(self, period: int) -> Optional[float]:
-        """최근 period 봉의 최고가 (진입 롱 기준선)"""
-        if len(self.bars) < period:
-            return None
-        return max(b.high for b in list(self.bars)[-period:])
+    def donchian_high(self, period: int, exclude_current: bool = True) -> Optional[float]:
+        """직전 period 봉의 최고가 (진입 롱 기준선).
 
-    def donchian_low(self, period: int) -> Optional[float]:
-        """최근 period 봉의 최저가 (진입 숏 기준선)"""
-        if len(self.bars) < period:
+        exclude_current=True면 현재(가장 최근) 봉을 제외한 직전 N봉으로 계산합니다.
+        돌파 판단은 '현재 종가 > 직전 N봉 고점'이어야 하므로 기본값을 True로 둡니다.
+        현재 봉을 포함하면 고점 >= 종가가 되어 돌파가 절대 성립하지 않습니다.
+        """
+        bars = list(self.bars)
+        end = len(bars) - 1 if exclude_current else len(bars)
+        window = bars[end - period:end]
+        if len(window) < period:
             return None
-        return min(b.low for b in list(self.bars)[-period:])
+        return max(b.high for b in window)
+
+    def donchian_low(self, period: int, exclude_current: bool = True) -> Optional[float]:
+        """직전 period 봉의 최저가 (진입 숏 기준선)."""
+        bars = list(self.bars)
+        end = len(bars) - 1 if exclude_current else len(bars)
+        window = bars[end - period:end]
+        if len(window) < period:
+            return None
+        return min(b.low for b in window)
+
+    def sma(self, period: int) -> Optional[float]:
+        """단순이동평균 (추세 필터용)"""
+        closes = self.get_closes()
+        if len(closes) < period:
+            return None
+        return float(np.mean(closes[-period:]))
 
     def atr(self, period: int = 14) -> Optional[float]:
         """Average True Range"""

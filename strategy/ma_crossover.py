@@ -115,6 +115,10 @@ class MACrossoverStrategy(BaseStrategy):
         self._entry_price = 0.0
         self._stop_loss = 0.0
 
+    def reset_position(self):
+        """주문 거부/실패 시 메인이 호출하여 전략 내부 상태를 되돌림 (desync 방지)"""
+        self._reset_position()
+
     @property
     def current_position(self) -> str:
         return self._position

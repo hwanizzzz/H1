@@ -21,14 +21,16 @@ strategy:
   donchian_exit_period: 10            # 청산 채널 기간 (10일 고/저)
   atr_period: 14                      # ATR 계산 기간
   atr_multiplier: 2.0                 # 손절 ATR 배수 (손절 = 진입가 ± 2*ATR)
+  trend_filter_period: 100            # 추세 필터 SMA 기간 (0=비활성). 종가>SMA일 때만 롱, <SMA일 때만 숏
 
 # 리스크 관리 설정
 risk:
-  account_equity: 10000000            # 계좌 자산 (원화, 예: 1천만원)
+  account_equity: 50000000            # 계좌 자산 (원화, 예: 5천만원)
   risk_per_trade_pct: 1.0             # 1회 거래 리스크 (계좌의 1%)
   max_positions: 3                    # 최대 동시 포지션 수
   daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
   max_contracts_per_trade: 5          # 1회 최대 계약 수
+  usd_krw_rate: 1350.0                # 원/달러 환율 (USD 손익 → 원화 환산용)
 
 # 실행 설정
 execution:
