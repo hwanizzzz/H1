@@ -90,7 +90,7 @@ def main():
                         account_equity_krw=cap_man * 10000,
                         risk_per_trade_pct=2.0, usd_krw_rate=USD_KRW,
                         slippage_ticks=1, max_contracts_per_trade=10,
-                        max_bars=len(bars) + 10)
+                        max_bars=500)
         r = bt.run(bars)
         pf = r.profit_factor
         pf_s = "inf" if pf == float("inf") else f"{pf:.2f}"

@@ -117,6 +117,7 @@ class Backtester:
                  risk_per_trade_pct: float = 1.0,
                  usd_krw_rate: float = 1350.0,
                  slippage_ticks: int = 1,
+                 commission_per_contract: float = 0.0,
                  max_contracts_per_trade: int = 5,
                  max_bars: int = 1000):
         self.strategy = strategy
@@ -124,6 +125,8 @@ class Backtester:
         self.tick_value = tick_value
         self.usd_krw_rate = usd_krw_rate
         self.slippage = slippage_ticks * tick_size
+        # 1계약 왕복 수수료(USD) - 진입+청산 합산. 데이트레이딩 비용 반영용.
+        self.commission_per_contract = commission_per_contract
         self.initial_equity_krw = account_equity_krw
 
         self.risk = RiskManager(
@@ -172,7 +175,9 @@ class Backtester:
 
             elif signal.signal == Signal.EXIT and side is not None:
                 exit_fill = close - self.slippage if side == "LONG" else close + self.slippage
-                pnl = self.risk.calc_pnl_usd(side, entry_fill, exit_fill, qty) * self.usd_krw_rate
+                gross = self.risk.calc_pnl_usd(side, entry_fill, exit_fill, qty)
+                commission = self.commission_per_contract * qty
+                pnl = (gross - commission) * self.usd_krw_rate
                 equity += pnl
                 self.risk.update_equity(equity)
                 result.trades.append(Trade(side, entry_time, bar.timestamp,
@@ -183,7 +188,8 @@ class Backtester:
         if side is not None and bars:
             last = bars[-1]
             exit_fill = last.close - self.slippage if side == "LONG" else last.close + self.slippage
-            pnl = self.risk.calc_pnl_usd(side, entry_fill, exit_fill, qty) * self.usd_krw_rate
+            gross = self.risk.calc_pnl_usd(side, entry_fill, exit_fill, qty)
+            pnl = (gross - self.commission_per_contract * qty) * self.usd_krw_rate
             equity += pnl
             result.trades.append(Trade(side, entry_time, last.timestamp,
                                        entry_fill, exit_fill, qty, pnl, "백테스트 종료 강제청산"))

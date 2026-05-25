@@ -161,10 +161,10 @@ class DataHandler:
         return float(np.mean(closes[-period:]))
 
     def atr(self, period: int = 14) -> Optional[float]:
-        """Average True Range"""
-        bars = list(self.bars)
-        if len(bars) < period + 1:
+        """Average True Range (최근 period+1봉만 사용 → O(period))"""
+        if len(self.bars) < period + 1:
             return None
+        bars = list(self.bars)[-(period + 1):]
         trs = []
         for i in range(1, len(bars)):
             high = bars[i].high
@@ -172,7 +172,7 @@ class DataHandler:
             prev_close = bars[i - 1].close
             tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
             trs.append(tr)
-        return float(np.mean(trs[-period:]))
+        return float(np.mean(trs))
 
     def ema(self, period: int) -> Optional[float]:
         closes = self.get_closes()

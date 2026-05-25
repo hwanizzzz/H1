@@ -59,6 +59,8 @@ def main():
                    help="초기 계좌 자산(원화) 덮어쓰기 - 최소자본 분석용")
     p.add_argument("--risk-pct", type=float, default=None,
                    help="1회 거래 리스크 %% 덮어쓰기")
+    p.add_argument("--commission", type=float, default=0.0,
+                   help="1계약 왕복 수수료 USD (해외선물 6A 약 8~12)")
     args = p.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -91,8 +93,9 @@ def main():
         risk_per_trade_pct=risk_pct,
         usd_krw_rate=risk.get("usd_krw_rate", 1350.0),
         slippage_ticks=cfg.get("execution", {}).get("slippage_ticks", 1),
+        commission_per_contract=args.commission,
         max_contracts_per_trade=risk["max_contracts_per_trade"],
-        max_bars=len(bars) + 10,
+        max_bars=500,
     )
     result = bt.run(bars)
 
