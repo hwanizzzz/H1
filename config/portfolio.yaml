@@ -1,0 +1,66 @@
+# =============================================================================
+#  다종목 포트폴리오 자동매매 설정 (금 MGC + S&P MES)
+#
+#  검증된 시스템:
+#    · 금(MGC, COMEX)   : 돌파전략 (Donchian + 추세필터)
+#    · S&P500(MES, CME) : 평균회귀전략 (눌림목 매수)
+#  거래당 리스크 3% (공격형), 일봉, 계좌 공유
+#
+#  실행: python portfolio_main.py
+#  ⚠️ 반드시 is_mock: true(모의투자)로 충분히 검증 후 실계좌 전환
+# =============================================================================
+
+api:
+  account_no: "YOUR_ACCOUNT_NO"
+  account_pw: "YOUR_ACCOUNT_PW"
+  is_mock: true
+
+# 계좌 공유 리스크 (전 시장 합산 기준)
+risk:
+  account_equity: 250000000        # 2.5억원
+  risk_per_trade_pct: 3.0          # 거래당 3% (공격형)
+  max_positions: 2                 # 동시 보유 최대 (금+S&P)
+  daily_loss_limit_pct: 9.0        # 일일 손실 한도
+  max_contracts_per_trade: 30      # 마이크로라 계약수 여유
+  usd_krw_rate: 1350.0
+
+execution:
+  check_interval_sec: 60
+  order_type: "MARKET"
+  slippage_ticks: 1
+
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  max_file_size_mb: 10
+  backup_count: 5
+
+# 운용 시장 목록 (각 시장 독립 운용, 계좌만 공유)
+markets:
+  - name: "금(MGC)"
+    code: "MGC"                    # ⚠️ 하나증권 실제 마이크로금 코드로 확인
+    exchange: "COMEX"
+    contract_month: ""             # ⚠️ 활성 근월물 수동 지정 권장 (예: "202604")
+    tick_size: 0.10
+    tick_value: 1.0                # MGC: 1틱($0.10) = $1
+    strategy:
+      name: "donchian_breakout"
+      timeframe: "1D"
+      donchian_entry_period: 20
+      donchian_exit_period: 10
+      atr_period: 14
+      atr_multiplier: 2.0
+      trend_filter_period: 100
+
+  - name: "S&P500(MES)"
+    code: "MES"                    # ⚠️ 하나증권 실제 마이크로 S&P 코드로 확인
+    exchange: "CME"
+    contract_month: ""             # S&P는 분기월(3·6·9·12)이라 자동선택 가능
+    tick_size: 0.25
+    tick_value: 1.25               # MES: 1틱(0.25) = $1.25
+    strategy:
+      name: "mean_reversion"
+      timeframe: "1D"
+      atr_period: 14
+      atr_multiplier: 3.0
+      trend_filter_period: 100
