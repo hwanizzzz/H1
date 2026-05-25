@@ -88,7 +88,10 @@ class TradingEngine:
             raise ValueError(f"알 수 없는 전략: {strat_name}")
 
         # ── 데이터 ────────────────────────────────────────────────────────────
-        self.data = DataHandler(self.symbol, max_bars=500)
+        self.data = DataHandler(self.symbol, max_bars=500,
+                                timeframe=strat_cfg.get("timeframe", "1D"))
+        # 봉이 마감될 때마다 전략을 1회 평가 (완성된 봉 기준)
+        self.data.on_bar_close = self._on_bar_close
 
         # ── 리스크 매니저 ─────────────────────────────────────────────────────
         self.risk = RiskManager(
@@ -232,13 +235,25 @@ class TradingEngine:
     # ── 전략 실행 루프 ────────────────────────────────────────────────────────
 
     def _strategy_loop(self):
-        """check_interval 초마다 전략 신호를 계산하고 주문 실행"""
+        """heartbeat: check_interval 초마다 리스크 현황을 로깅.
+
+        실제 전략 평가는 봉 마감 콜백(_on_bar_close)에서 일어납니다.
+        과거에는 이 루프가 매 주기마다 '형성 중인 봉'으로 전략을 돌려
+        완성되지 않은 데이터로 신호를 내는 문제가 있었습니다.
+        """
         while self._running:
             try:
-                self._run_strategy_once()
+                logger.debug(self.risk.status_summary())
             except Exception as e:
-                logger.error(f"전략 실행 오류: {e}", exc_info=True)
+                logger.error(f"heartbeat 오류: {e}", exc_info=True)
             time.sleep(self.check_interval)
+
+    def _on_bar_close(self, completed_bar):
+        """봉 마감 시 호출되어 전략을 1회 평가한다."""
+        try:
+            self._run_strategy_once()
+        except Exception as e:
+            logger.error(f"전략 실행 오류: {e}", exc_info=True)
 
     def _run_strategy_once(self):
         if self.data.bar_count() < self.strategy.get_min_bars_required():

@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 from collections import deque
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Callable
 from utils.logger import setup_logger
 
 logger = setup_logger("data_handler")
@@ -25,22 +26,63 @@ class DataHandler:
     """
     실시간 틱 데이터를 OHLCV 봉으로 집계하고
     전략에 필요한 지표를 계산합니다.
+
+    봉 마감(롤오버) 처리:
+      틱이 들어올 때마다 timeframe 기준으로 봉 구간이 바뀌었는지 판단합니다.
+      구간이 바뀌면 직전 봉을 완성하여 bars에 추가하고 on_bar_close 콜백을 호출합니다.
+      → 전략은 '완성된 봉'에 대해서만, 봉 마감 시점에 1회 평가됩니다(백테스트와 동일 의미).
     """
 
-    def __init__(self, symbol: str, max_bars: int = 500):
+    def __init__(self, symbol: str, max_bars: int = 500, timeframe: str = "1D"):
         self.symbol = symbol
+        self.timeframe = timeframe
         self.bars: deque[OHLCVBar] = deque(maxlen=max_bars)
         self._current_bar: Optional[OHLCVBar] = None
+        self._current_key = None
+        # 봉이 완성될 때 호출되는 콜백: fn(completed_bar) -> None
+        self.on_bar_close: Optional[Callable[[OHLCVBar], None]] = None
 
     def add_bar(self, bar: OHLCVBar):
-        """완성된 봉 추가 (API로부터 일봉 데이터 수신 시)"""
+        """완성된 봉 추가 (API로부터 과거 일봉 데이터 수신 시)"""
         self.bars.append(bar)
         logger.debug(f"봉 추가: {bar.timestamp} O={bar.open} H={bar.high} L={bar.low} C={bar.close}")
 
+    def _bar_key(self, ts: datetime):
+        """timeframe 기준으로 봉을 구분하는 키. 키가 바뀌면 새 봉 구간."""
+        if ts is None:
+            ts = datetime.now()
+        tf = self.timeframe.upper()
+        if tf == "1D":
+            return ts.date()
+        if tf == "4H":
+            return (ts.date(), ts.hour // 4)
+        if tf == "1H":
+            return (ts.date(), ts.hour)
+        if tf == "30M":
+            return (ts.date(), ts.hour, ts.minute // 30)
+        # 알 수 없는 timeframe은 일봉으로 처리
+        return ts.date()
+
     def update_tick(self, price: float, volume: float = 0.0, timestamp=None):
-        """실시간 틱 수신 시 현재 봉 업데이트"""
+        """실시간 틱 수신. 봉 구간이 바뀌면 직전 봉을 완성하고 콜백을 호출한다."""
+        if timestamp is None:
+            timestamp = datetime.now()
+        key = self._bar_key(timestamp)
+
         if self._current_bar is None:
             self._current_bar = OHLCVBar(timestamp, price, price, price, price, volume)
+            self._current_key = key
+            return
+
+        if key != self._current_key:
+            # 봉 마감: 직전 봉을 완성하여 저장하고 새 봉 시작
+            completed = self._current_bar
+            self.bars.append(completed)
+            self._current_bar = OHLCVBar(timestamp, price, price, price, price, volume)
+            self._current_key = key
+            logger.debug(f"봉 마감: {completed.timestamp} C={completed.close} → 전략 평가")
+            if self.on_bar_close:
+                self.on_bar_close(completed)
         else:
             self._current_bar.high = max(self._current_bar.high, price)
             self._current_bar.low = min(self._current_bar.low, price)
@@ -48,10 +90,14 @@ class DataHandler:
             self._current_bar.volume += volume
 
     def close_current_bar(self):
-        """현재 봉을 확정하고 저장"""
+        """현재 봉을 강제 확정하고 저장 (세션 종료 등)"""
         if self._current_bar is not None:
-            self.bars.append(self._current_bar)
+            completed = self._current_bar
+            self.bars.append(completed)
             self._current_bar = None
+            self._current_key = None
+            if self.on_bar_close:
+                self.on_bar_close(completed)
 
     def to_dataframe(self) -> pd.DataFrame:
         if not self.bars:

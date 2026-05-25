@@ -55,6 +55,10 @@ def main():
                    help="종목 틱 사이즈 덮어쓰기 (예: M6A=0.0001)")
     p.add_argument("--tick-value", type=float, default=None,
                    help="틱당 가치 USD 덮어쓰기 (예: M6A=1.0, 6A=10.0, MES=1.25)")
+    p.add_argument("--equity", type=float, default=None,
+                   help="초기 계좌 자산(원화) 덮어쓰기 - 최소자본 분석용")
+    p.add_argument("--risk-pct", type=float, default=None,
+                   help="1회 거래 리스크 %% 덮어쓰기")
     args = p.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as f:
@@ -66,6 +70,8 @@ def main():
 
     tick_size = args.tick_size if args.tick_size is not None else sym["tick_size"]
     tick_value = args.tick_value if args.tick_value is not None else sym["tick_value"]
+    equity = args.equity if args.equity is not None else risk["account_equity"]
+    risk_pct = args.risk_pct if args.risk_pct is not None else risk["risk_per_trade_pct"]
 
     if args.csv:
         bars = load_csv(args.csv)
@@ -81,8 +87,8 @@ def main():
         strategy=strategy,
         tick_size=tick_size,
         tick_value=tick_value,
-        account_equity_krw=risk["account_equity"],
-        risk_per_trade_pct=risk["risk_per_trade_pct"],
+        account_equity_krw=equity,
+        risk_per_trade_pct=risk_pct,
         usd_krw_rate=risk.get("usd_krw_rate", 1350.0),
         slippage_ticks=cfg.get("execution", {}).get("slippage_ticks", 1),
         max_contracts_per_trade=risk["max_contracts_per_trade"],
