@@ -4,41 +4,77 @@ api:
   account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
   is_mock: true                       # true: 모의투자, false: 실계좌
 
-# CME 호주달러 선물 (6A) 설정
+# ── 단일 종목 (main.py 사용) ────────────────────────────────────────────────
+# 기본: CME 호주달러 선물(6A)
 symbol:
-  code: "6A"                          # CME 호주달러 선물 코드
+  code: "6A"                          # 기준 종목코드
+  name: "AUD/USD"
   exchange: "CME"
-  contract_month: ""                  # 비워두면 최근월물 자동 선택 (예: "202506")
-  tick_size: 0.0001                   # 최소가격변동단위
-  tick_value: 10.0                    # 틱당 가치 (USD) - 6A: 1틱 = $10
-  contract_size: 100000               # 계약당 호주달러 수량
+  contract_code: ""                   # 정확한 월물 지정(예: "M26"=6월). 비우면 분기물 자동
+  tick_size: 0.0001
+  tick_value: 10.0                    # 6A: 1틱=$10
+  timeframe: "1D"                     # 1D / 4H / 1H / 30M / 5M / 1M
+  strategy:
+    name: "donchian_breakout"         # donchian_breakout / ma_crossover / mean_reversion
+    donchian_entry_period: 20
+    donchian_exit_period: 10
+    atr_period: 14
+    atr_multiplier: 2.0
 
-# Donchian Breakout 전략 설정
-strategy:
-  name: "donchian_breakout"
-  timeframe: "1D"                     # 봉 단위: 1D(일봉), 4H, 1H, 30M
-  donchian_entry_period: 20           # 진입 채널 기간 (20일 고/저)
-  donchian_exit_period: 10            # 청산 채널 기간 (10일 고/저)
-  atr_period: 14                      # ATR 계산 기간
-  atr_multiplier: 2.0                 # 손절 ATR 배수 (손절 = 진입가 ± 2*ATR)
+# ── 다종목 포트폴리오 (portfolio_main.py 사용) ──────────────────────────────
+# 금(MGC) + S&P(MES) 마이크로 동시 운용
+# ※ 종목코드/월물 표기는 증권사마다 다를 수 있음 — 1QHTS 에서 확인 후
+#   contract_code 를 정확히 입력하세요. (예: 금 4월물 → "J26")
+symbols:
+  - code: "MGC"                       # E-micro Gold (10oz)
+    name: "E-micro Gold"
+    exchange: "COMEX"
+    contract_code: ""                 # 예: "J26"(4월), "M26"(6월), "Z26"(12월)
+    tick_size: 0.10
+    tick_value: 1.0                   # MGC: 1틱(0.10)=$1.00
+    timeframe: "1D"
+    strategy:
+      name: "donchian_breakout"
+      donchian_entry_period: 20
+      donchian_exit_period: 10
+      atr_period: 14
+      atr_multiplier: 2.0
 
-# 리스크 관리 설정
+  - code: "MES"                       # Micro E-mini S&P 500
+    name: "Micro E-mini S&P 500"
+    exchange: "CME"
+    contract_code: ""                 # 분기물 표기 예: "M26"(6월), "U26"(9월)
+    tick_size: 0.25
+    tick_value: 1.25                  # MES: 1틱(0.25)=$1.25
+    timeframe: "1D"
+    strategy:
+      name: "ma_crossover"
+      fast_period: 9
+      slow_period: 21
+      adx_period: 14
+      adx_threshold: 25.0
+      atr_period: 14
+      atr_multiplier: 1.5
+
+# ── 리스크 관리 (계좌 단위, 다종목 공유) ────────────────────────────────────
+# 공격형 설정: 거래당 3% 리스크
 risk:
-  account_equity: 10000000            # 계좌 자산 (원화, 예: 1천만원)
-  risk_per_trade_pct: 1.0             # 1회 거래 리스크 (계좌의 1%)
+  account_equity: 10000000            # 계좌 자산 (원화)
+  risk_per_trade_pct: 3.0             # 1회 거래 리스크 3% (공격형)
+  daily_loss_limit_pct: 6.0           # 일일 최대 손실 한도 6%
   max_positions: 3                    # 최대 동시 포지션 수
-  daily_loss_limit_pct: 3.0          # 일일 최대 손실 한도 (계좌의 3%)
   max_contracts_per_trade: 5          # 1회 최대 계약 수
+  usd_krw_rate: 1350.0                # USD/KRW 환산율
 
-# 실행 설정
+# ── 실행 설정 ────────────────────────────────────────────────────────────────
 execution:
-  check_interval_sec: 60              # 전략 체크 주기 (초)
+  check_interval_sec: 60
   order_type: "MARKET"                # MARKET: 시장가, LIMIT: 지정가
-  slippage_ticks: 1                   # 예상 슬리피지 (틱)
+  slippage_ticks: 1
 
-# 로깅 설정
+# ── 로깅 설정 ────────────────────────────────────────────────────────────────
 logging:
-  level: "INFO"                       # DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
   log_dir: "logs"
   max_file_size_mb: 10
   backup_count: 5
