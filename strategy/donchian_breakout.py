@@ -48,12 +48,12 @@ class DonchianBreakoutStrategy(BaseStrategy):
             return TradeSignal(Signal.NONE)
 
         # 진입 채널 (현재 봉 제외 - 직전 N봉 기준)
-        entry_high = data_handler.donchian_high(self.entry_period)
-        entry_low  = data_handler.donchian_low(self.entry_period)
+        entry_high = data_handler.donchian_high(self.entry_period, offset=1)
+        entry_low  = data_handler.donchian_low(self.entry_period, offset=1)
 
-        # 청산 채널
-        exit_high = data_handler.donchian_high(self.exit_period)
-        exit_low  = data_handler.donchian_low(self.exit_period)
+        # 청산 채널 (현재 봉 제외)
+        exit_high = data_handler.donchian_high(self.exit_period, offset=1)
+        exit_low  = data_handler.donchian_low(self.exit_period, offset=1)
 
         if None in (entry_high, entry_low, exit_high, exit_low):
             return TradeSignal(Signal.NONE)
