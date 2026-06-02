@@ -43,9 +43,8 @@ symbols:
   - code: "MES"                       # Micro E-mini S&P 500
     name: "Micro E-mini S&P 500"
     exchange: "CME"
-    contract_code: "M26"              # 6월물 (1QHTS 확인: MESM26, 거래량 170k)
-                                      # ※ 6월 셋째 금요일(2026-06-19) 만기.
-                                      #   만기 1주 전 U26(9월물)로 수동 롤오버.
+    contract_code: "U26"              # 9월물 (만기 2026-09-18) — M26 만기(6/19) 회피 위해 선제 전환
+                                      # ※ 다음 롤오버: 9월 둘째 주쯤 Z26(12월물)으로 변경
     tick_size: 0.25
     tick_value: 1.25                  # MES: 1틱(0.25)=$1.25
     timeframe: "1D"
