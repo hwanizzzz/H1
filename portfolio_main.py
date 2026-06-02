@@ -25,6 +25,7 @@ from risk.risk_manager import RiskManager, SymbolSpec
 from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
 from utils.logger import setup_logger
+from utils.safety import validate_account_safety, AccountSafetyError
 
 logger = setup_logger("portfolio")
 
@@ -126,6 +127,12 @@ def main():
     if not config.get("symbols"):
         logger.error("config.yaml 에 symbols: 목록이 없습니다. (단일 종목은 main.py 사용)")
         sys.exit(1)
+
+    try:
+        validate_account_safety(config)
+    except AccountSafetyError as e:
+        logger.error(f"계좌 안전 검증 실패 — 봇 시작 거부\n{e}")
+        sys.exit(2)
 
     engine = PortfolioEngine(config)
     try:

@@ -4,6 +4,25 @@ api:
   account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
   is_mock: true                       # true: 모의투자, false: 실계좌
 
+# ── 계좌 안전 검증 (사고 방지 — 매우 중요) ─────────────────────────────────
+# 메인 계좌에서 별도 실거래를 진행 중이실 때 휴먼 에러로 모의/실계좌가
+# 뒤바뀌어 실행되는 사고를 막습니다.
+#
+# 규칙:
+#   1) api.account_no 가 아래 두 목록 중 하나에 반드시 등록돼 있어야 함
+#   2) mock_accounts 의 번호는 is_mock=true 일 때만 허용
+#   3) live_accounts 의 번호는 is_mock=false 일 때만 허용
+#   4) 위반 시 봇 시작 거부
+#
+# 사용 예 (모의계좌 5555-01, 실계좌 1234-01 두 개를 관리):
+#   account_safety:
+#     mock_accounts: ["5555-01"]
+#     live_accounts: ["1234-01"]
+account_safety:
+  mock_accounts: []                   # 모의투자 계좌번호 목록
+  live_accounts: []                   # 실계좌 번호 목록 (메인 실거래 계좌 등)
+  require_registration: true          # false 로 두면 검증 무력화(권장 안 함)
+
 # ── 단일 종목 (main.py 사용) ────────────────────────────────────────────────
 # 기본: CME 호주달러 선물(6A)
 symbol:
