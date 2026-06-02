@@ -29,7 +29,7 @@ symbols:
   - code: "MGC"                       # E-micro Gold (10oz)
     name: "E-micro Gold"
     exchange: "COMEX"
-    contract_code: ""                 # 예: "J26"(4월), "M26"(6월), "Z26"(12월)
+    contract_code: "Q26"              # 8월물 (1QHTS 확인: MGCQ26, 거래량 128k)
     tick_size: 0.10
     tick_value: 1.0                   # MGC: 1틱(0.10)=$1.00
     timeframe: "1D"
@@ -43,7 +43,9 @@ symbols:
   - code: "MES"                       # Micro E-mini S&P 500
     name: "Micro E-mini S&P 500"
     exchange: "CME"
-    contract_code: ""                 # 분기물 표기 예: "M26"(6월), "U26"(9월)
+    contract_code: "M26"              # 6월물 (1QHTS 확인: MESM26, 거래량 170k)
+                                      # ※ 6월 셋째 금요일(2026-06-19) 만기.
+                                      #   만기 1주 전 U26(9월물)로 수동 롤오버.
     tick_size: 0.25
     tick_value: 1.25                  # MES: 1틱(0.25)=$1.25
     timeframe: "1D"
