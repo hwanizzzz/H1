@@ -17,7 +17,6 @@
 
 import sys
 import time
-import yaml
 from typing import Dict
 
 from api.hana_api import HanaAPI
@@ -26,13 +25,9 @@ from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
 from utils.logger import setup_logger
 from utils.safety import validate_account_safety, AccountSafetyError
+from utils.config_loader import load_config
 
 logger = setup_logger("portfolio")
-
-
-def load_config(path: str = "config/config.yaml") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 class PortfolioEngine:
