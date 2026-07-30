@@ -27,9 +27,11 @@ except ImportError:
     sys.exit(1)
 
 
-# 하나증권 COM 클래스에서 실제로 관찰된/추정되는 접두어들
-HANA_PREFIXES = ("HANA", "H1", "H1QOPEN", "HAOPEN", "HANAOP", "HANAAPI",
-                 "HANAWTS", "1QOPEN", "1QAPI")
+# 하나증권 COM 클래스 접두어
+# HFCOMMAGENT: 실제 1Q Open API 모듈 (개발자가이드 확인)
+# HANA*      : 1QHTS 부속 컨트롤 (차트 등, API 아님)
+HANA_PREFIXES = ("HFCOMMAGENT", "HFCOMM", "HFAGENT",
+                 "HANA", "H1", "1QOPEN", "1QAPI")
 
 
 def is_hana_candidate(name: str, allow_all: bool = False) -> bool:
@@ -183,13 +185,12 @@ def main():
             print("     -2147221005 (Invalid class)  : ProgID 자체가 존재하지 않음")
             print("     -2147024894 (File not found) : DLL 경로 문제")
     else:
-        print(" 하나증권 관련 ProgID 를 찾지 못했습니다.")
-        print(" 확인 사항:")
-        print("  1) 하나증권 1Q OpenAPI 는 1QHTS 와 별개로 신청·설치 필요")
-        print("     → 하나증권 홈페이지 [해외파생 API] 신청 후 설치 프로그램 다운로드")
-        print("  2) 설치 후 OCX 를 관리자 권한으로 등록:")
-        print("     regsvr32 \"C:\\경로\\HANAAPI.ocx\"  (예시)")
-        print("  3) 하나증권 API 지원팀 문의: 정확한 ProgID 요청")
+        print(" HFCOMMAGENT.HFCommAgentCtrl.1 미등록 상태.")
+        print(" 조치:")
+        print("  1) 1Q Open API 설치 폴더에서 regHFCommAgent.bat 를")
+        print("     관리자 권한 cmd 로 실행 (개발자가이드 2.8 참고)")
+        print("  2) 재시도: python tools\\find_progid.py --dispatch")
+        print("  3) 그래도 안 되면 32비트 Python 여부 재확인 + vcredist_x86 설치")
     print("=" * 70)
 
 

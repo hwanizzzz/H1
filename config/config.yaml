@@ -1,44 +1,46 @@
-# 하나증권 1Q Open API 설정
+# ─────────────────────────────────────────────────────────────────────────────
+# 하나증권 Open API (1Q Pro) 자동매매 — 공용 설정
+#
+# 계좌번호·비밀번호·인증정보는 이 파일에 넣지 마세요.
+# → config/config.local.yaml 에 오버라이드하세요 (.gitignore 로 커밋 차단됨).
+# 템플릿: config/config.local.example.yaml 참고
+# ─────────────────────────────────────────────────────────────────────────────
+
 api:
-  account_no: "YOUR_ACCOUNT_NO"      # 계좌번호 (예: 12345678-01)
-  account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
-  is_mock: true                       # true: 모의투자, false: 실계좌
-  progid: ""                          # COM ProgID. 비우면 기본값 사용.
-                                      # 오류 '잘못된 클래스 문자열' 시 아래 실행:
-                                      #   python tools/find_progid.py
-                                      # 감지된 값을 config.local.yaml 의 api.progid 에 지정
+  # OpenAPI 설치 루트 (아래에 TranRes/, RealRes/ 폴더가 있어야 함)
+  openapi_root: "C:/1QOpenAPI/1Q OpenAPI"
+
+  # COM ProgID (기본값 사용 권장. 문제 시 tools/find_progid.py --dispatch)
+  progid: "HFCOMMAGENT.HFCommAgentCtrl.1"
+
+  # 로그인 정보 — 실제 값은 config.local.yaml 에 입력
+  user_id: "YOUR_USER_ID"
+  account_no: "YOUR_ACCOUNT_NO"
+  account_pw: "YOUR_ACCOUNT_PW"
+  cert_pw: ""                        # 공동인증서 비밀번호 (use_cloud_cert=false 일 때만)
+  use_cloud_cert: true               # true: CommCloudCert, false: CommLogin(공동인증)
+
+  is_mock: true                      # true: 해외모의(mode=2), false: 실거래(mode=0)
 
 # ── 계좌 안전 검증 (사고 방지 — 매우 중요) ─────────────────────────────────
-# 메인 계좌에서 별도 실거래를 진행 중이실 때 휴먼 에러로 모의/실계좌가
-# 뒤바뀌어 실행되는 사고를 막습니다.
-#
-# 규칙:
-#   1) api.account_no 가 아래 두 목록 중 하나에 반드시 등록돼 있어야 함
-#   2) mock_accounts 의 번호는 is_mock=true 일 때만 허용
-#   3) live_accounts 의 번호는 is_mock=false 일 때만 허용
-#   4) 위반 시 봇 시작 거부
-#
-# 사용 예 (모의계좌 5555-01, 실계좌 1234-01 두 개를 관리):
-#   account_safety:
-#     mock_accounts: ["5555-01"]
-#     live_accounts: ["1234-01"]
+# 메인 계좌 실거래와 봇의 모의계좌를 혼동하지 않도록 계좌번호를 명시 등록.
 account_safety:
   mock_accounts: []                   # 모의투자 계좌번호 목록
   live_accounts: []                   # 실계좌 번호 목록 (메인 실거래 계좌 등)
-  require_registration: true          # false 로 두면 검증 무력화(권장 안 함)
+  require_registration: true
 
 # ── 단일 종목 (main.py 사용) ────────────────────────────────────────────────
-# 기본: CME 호주달러 선물(6A)
 symbol:
-  code: "6A"                          # 기준 종목코드
-  name: "AUD/USD"
-  exchange: "CME"
-  contract_code: ""                   # 정확한 월물 지정(예: "M26"=6월). 비우면 분기물 자동
-  tick_size: 0.0001
-  tick_value: 10.0                    # 6A: 1틱=$10
-  timeframe: "1D"                     # 1D / 4H / 1H / 30M / 5M / 1M
+  code: "MGC"                         # 기준 심볼
+  name: "E-micro Gold"
+  exchange: "COMEX"
+  contract_code: "Q26"                # 월물 접미어 → 주문 종목코드 = MGC + Q26 = MGCQ26
+  quote_code: ""                      # 비우면 주문코드와 동일. v3.2 부터 분리 가능
+  tick_size: 0.10
+  tick_value: 1.0                     # MGC: 1틱(0.10)=$1.00
+  timeframe: "1D"
   strategy:
-    name: "donchian_breakout"         # donchian_breakout / ma_crossover / mean_reversion
+    name: "donchian_breakout"
     donchian_entry_period: 20
     donchian_exit_period: 10
     atr_period: 14
@@ -46,15 +48,14 @@ symbol:
 
 # ── 다종목 포트폴리오 (portfolio_main.py 사용) ──────────────────────────────
 # 금(MGC) + S&P(MES) 마이크로 동시 운용
-# ※ 종목코드/월물 표기는 증권사마다 다를 수 있음 — 1QHTS 에서 확인 후
-#   contract_code 를 정확히 입력하세요. (예: 금 4월물 → "J26")
 symbols:
   - code: "MGC"                       # E-micro Gold (10oz)
     name: "E-micro Gold"
     exchange: "COMEX"
-    contract_code: "Q26"              # 8월물 (1QHTS 확인: MGCQ26, 거래량 128k)
+    contract_code: "Q26"              # 8월물 (1QHTS: MGCQ26)
+    quote_code: ""
     tick_size: 0.10
-    tick_value: 1.0                   # MGC: 1틱(0.10)=$1.00
+    tick_value: 1.0
     timeframe: "1D"
     strategy:
       name: "donchian_breakout"
@@ -66,10 +67,10 @@ symbols:
   - code: "MES"                       # Micro E-mini S&P 500
     name: "Micro E-mini S&P 500"
     exchange: "CME"
-    contract_code: "U26"              # 9월물 (만기 2026-09-18) — M26 만기(6/19) 회피 위해 선제 전환
-                                      # ※ 다음 롤오버: 9월 둘째 주쯤 Z26(12월물)으로 변경
+    contract_code: "U26"              # 9월물 (M26 6/19 만기 회피)
+    quote_code: ""
     tick_size: 0.25
-    tick_value: 1.25                  # MES: 1틱(0.25)=$1.25
+    tick_value: 1.25
     timeframe: "1D"
     strategy:
       name: "ma_crossover"
@@ -81,22 +82,20 @@ symbols:
       atr_multiplier: 1.5
 
 # ── 리스크 관리 (계좌 단위, 다종목 공유) ────────────────────────────────────
-# 공격형 설정: 거래당 3% 리스크
 risk:
-  account_equity: 10000000            # 계좌 자산 (원화)
-  risk_per_trade_pct: 3.0             # 1회 거래 리스크 3% (공격형)
-  daily_loss_limit_pct: 6.0           # 일일 최대 손실 한도 6%
-  max_positions: 3                    # 최대 동시 포지션 수
-  max_contracts_per_trade: 5          # 1회 최대 계약 수
-  usd_krw_rate: 1350.0                # USD/KRW 환산율
+  account_equity: 10000000            # 원화 기준 계좌 자산
+  risk_per_trade_pct: 3.0             # 거래당 리스크 3% (공격형)
+  daily_loss_limit_pct: 6.0
+  max_positions: 3
+  max_contracts_per_trade: 5
+  usd_krw_rate: 1350.0
 
 # ── 실행 설정 ────────────────────────────────────────────────────────────────
 execution:
   check_interval_sec: 60
-  order_type: "MARKET"                # MARKET: 시장가, LIMIT: 지정가
+  order_type: "MARKET"                # MARKET / LIMIT
   slippage_ticks: 1
 
-# ── 로깅 설정 ────────────────────────────────────────────────────────────────
 logging:
   level: "INFO"
   log_dir: "logs"

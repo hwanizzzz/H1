@@ -1,30 +1,43 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# 로컬 오버라이드 예시 파일
+# 로컬 오버라이드 예시 — 실제 계좌/비밀번호/인증정보는 여기에만 두세요.
 #
 # 사용법:
 #   1) 이 파일을 config/config.local.yaml 이름으로 복사
-#   2) 본인의 계좌번호·비밀번호로 채우기
-#   3) 그대로 실행 — config/config.yaml 위에 병합되어 사용됨
+#   2) 본인의 계좌·인증 정보로 채우기
+#   3) 실행 시 config/config.yaml 위에 자동 병합됨
 #
-# 이 파일(config.local.yaml)은 .gitignore 에 등록돼 있어 git 커밋 대상이 아닙니다.
-# 절대 이 파일을 직접 커밋하지 마세요.
+# 이 파일(config.local.yaml)은 .gitignore 로 git 커밋 대상에서 제외됩니다.
 # ─────────────────────────────────────────────────────────────────────────────
 
 api:
-  account_no: "여기에_모의계좌번호"     # 예: "12345678-01"
+  # 하나 Open API 설치 경로 (설치 시 지정한 폴더)
+  # 아래에 TranRes/, RealRes/, system/ 등이 있어야 함
+  openapi_root: "C:/1QOpenAPI/1Q OpenAPI"
+
+  # 하나증권 로그인 아이디
+  user_id: "여기에_하나증권_로그인_ID"
+
+  # 모의계좌번호 (예: "12345678-01" 또는 "12345678-220")
+  account_no: "여기에_모의계좌번호"
+
+  # 계좌 비밀번호 (평문 저장. GetEncrpyt 로 자동 암호화되어 API 전송)
   account_pw: "여기에_계좌비밀번호"
-  is_mock: true                         # 모의는 반드시 true
-  # progid: "여기에_감지된_ProgID"      # python tools/find_progid.py 실행 후 얻은 값
-                                        # 기본값으로 접속 실패 시에만 지정
+
+  # 로그인 방식
+  use_cloud_cert: true                # true(권장): 클라우드인증서(CommCloudCert)
+                                       # false: 공동인증서(CommLogin) — cert_pw 필요
+  cert_pw: ""                          # use_cloud_cert=false 인 경우만 입력
+
+  is_mock: true                        # 모의는 반드시 true
 
 account_safety:
   mock_accounts:
-    - "여기에_모의계좌번호"             # 위 account_no 와 동일하게
+    - "여기에_모의계좌번호"            # 위 account_no 와 동일하게
   live_accounts:
-    - "여기에_본인_실계좌번호"          # 메인 실거래 계좌(등록만 — 이 봇이 쓰지 않음)
+    - "여기에_본인_실계좌번호"         # 메인 실거래 계좌(등록만 — 봇은 사용하지 않음)
   require_registration: true
 
-# 필요 시 리스크·종목별 파라미터도 오버라이드 가능:
+# 계좌 잔고나 전략 파라미터도 오버라이드 가능:
 # risk:
-#   account_equity: 5000000              # 모의 계좌 실제 잔고에 맞춰 조정
-#   risk_per_trade_pct: 2.0              # 3%가 부담되면 낮춰서 시작
+#   account_equity: 5000000            # 모의계좌 실제 초기잔고
+#   risk_per_trade_pct: 2.0            # 3%가 부담되면 낮춰 시작
