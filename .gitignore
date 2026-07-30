@@ -14,3 +14,4 @@ data/*.csv
 # 환경/비밀
 .env
 config/config.local.yaml
+tmp_docs/
