@@ -1,4 +1,5 @@
-pywin32>=306          # 하나증권 COM API 연동 (Windows 필수)
+pywin32>=306          # Windows COM/API 지원 (하나 API 자체는 QAxWidget 사용)
+PyQt5>=5.15           # HFCOMMAGENT ActiveX 호스팅 (QAxContainer.QAxWidget)
 numpy>=1.24.0         # 지표 계산 (필수)
 pyyaml>=6.0           # config 파싱 (필수)
 

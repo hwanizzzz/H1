@@ -12,11 +12,11 @@
   - config/config.local.yaml 에 계좌·비밀번호 설정
 """
 
+import signal
 import sys
-import time
 
 from api.hana_api import (
-    HanaOpenAPI, HanaFuturesClient,
+    HanaOpenAPI, HanaFuturesClient, ensure_qapp,
     LOGIN_MODE_OVERSEAS_MOCK, LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE,
 )
 from risk.risk_manager import RiskManager, SymbolSpec
@@ -88,8 +88,8 @@ class TradingEngine:
                     f"({'모의투자' if self.is_mock else '실계좌'})")
         logger.info("=" * 60)
 
-        if not self.api.connect(self.openapi_root):
-            logger.error("HanaOpenAPI connect 실패 — 종료")
+        if not self.api.connect_server(self.openapi_root):
+            logger.error("HanaOpenAPI 서버 접속 실패 — 종료")
             sys.exit(1)
 
         mode = LOGIN_MODE_OVERSEAS_MOCK if self.is_mock else LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE
@@ -139,14 +139,18 @@ def main():
         logger.error(f"계좌 안전 검증 실패 — 봇 시작 거부\n{e}")
         sys.exit(2)
 
+    app = ensure_qapp()
     engine = TradingEngine(config)
+
+    def _sigint(*_):
+        logger.info("사용자 종료 요청 (Ctrl+C)")
+        app.quit()
+    signal.signal(signal.SIGINT, _sigint)
+
     try:
         engine.start()
-        logger.info("Ctrl+C로 종료")
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("사용자 종료 요청")
+        logger.info("Ctrl+C 로 종료")
+        app.exec_()
     finally:
         engine.stop()
 

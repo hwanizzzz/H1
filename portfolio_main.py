@@ -14,12 +14,12 @@
   - 거래당 리스크 3% 공격형 설정 — 손실 변동성 큼
 """
 
+import signal
 import sys
-import time
 from typing import Dict
 
 from api.hana_api import (
-    HanaOpenAPI, HanaFuturesClient,
+    HanaOpenAPI, HanaFuturesClient, ensure_qapp,
     LOGIN_MODE_OVERSEAS_MOCK, LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE,
 )
 from risk.risk_manager import RiskManager, SymbolSpec
@@ -103,9 +103,9 @@ class PortfolioEngine:
                     f"{self.risk.status_summary()}")
         logger.info("=" * 60)
 
-        # 1) COM 컨트롤 초기화 + 리소스 로드
-        if not self.api.connect(self.openapi_root):
-            logger.error("HanaOpenAPI connect 실패 — 종료")
+        # 1) COM 컨트롤 초기화 + 리소스 로드 (QAxWidget 은 __init__ 때 완료됨)
+        if not self.api.connect_server(self.openapi_root):
+            logger.error("HanaOpenAPI 서버 접속 실패 — 종료")
             sys.exit(1)
 
         # 2) 로그인 (해외모의 or 실계좌)
@@ -184,14 +184,20 @@ def main():
         logger.error(f"계좌 안전 검증 실패 — 봇 시작 거부\n{e}")
         sys.exit(2)
 
+    # PyQt5 이벤트 루프 필요 (QAxWidget 호스팅)
+    app = ensure_qapp()
     engine = PortfolioEngine(config)
+
+    # Ctrl+C 로 Qt 이벤트 루프 탈출
+    def _sigint(*_):
+        logger.info("사용자 종료 요청 (Ctrl+C)")
+        app.quit()
+    signal.signal(signal.SIGINT, _sigint)
+
     try:
         engine.start()
-        logger.info("Ctrl+C로 종료")
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("사용자 종료 요청")
+        logger.info("Ctrl+C 로 종료")
+        app.exec_()
     finally:
         engine.stop()
 

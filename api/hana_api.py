@@ -1,26 +1,31 @@
 """
-하나증권 Open API (1Q Pro) — Python COM 래퍼
+하나증권 Open API (1Q Pro) — Python 래퍼 (PyQt5 QAxWidget 기반)
 
-기반 스펙:
-  - 하나증권 Open API 개발자가이드 v3.1 (2025-06-09)
-  - ProgID: HFCOMMAGENT.HFCommAgentCtrl.1
-  - 32비트 Python + 32비트 OCX + Windows 필수
+배경:
+  HFCOMMAGENT.HFCommAgentCtrl.1 은 "윈도우가 있는 ActiveX 컨트롤" 이라
+  win32com.client.Dispatch 만으로는 초기화 되지 않고 모든 메소드가
+  E_UNEXPECTED(-2147418113) 로 실패한다. PyQt5 의 QAxWidget 이
+  숨김 창 + Qt 메시지 펌프를 자동 제공해 OCX 를 정상 호스팅한다.
 
-두 계층 구조:
-  - HanaOpenAPI    : 저수준 COM 래퍼(CommInit, RequestTran, RegisterReal ...)
-  - HanaFuturesClient : 해외선물 매매 상위 API (send_order, get_positions ...)
+계층:
+  HanaOpenAPI       : QAxWidget 기반 저수준 COM 래퍼
+  HanaFuturesClient : 해외선물 매매 상위 API (send_order/get_positions ...)
 
 주요 흐름:
-  1) api = HanaOpenAPI(); api.connect(open_api_root)
-  2) api.login_cloud_cert(user_id, mode=OVERSEAS_MOCK)   # 해외모의
-  3) client = HanaFuturesClient(api, account_no, account_pw)
-  4) client.subscribe_tick("MGCQ26")   # V10 실시간 구독
-  5) client.send_order("MGCQ26", "BUY", 1, prc_type="MARKET")
+  app = ensure_qapp()
+  api = HanaOpenAPI()
+  api.connect_server(openapi_root)  # CommInit + 리소스 로드
+  api.set_login_mode(LOGIN_MODE_OVERSEAS_MOCK)
+  api.login_cloud_cert(user_id)
+  client = HanaFuturesClient(api, account_no, account_pw, user_id)
+  client.prepare()
+  client.subscribe_tick("MGCQ26")
+  ...
+  app.exec_()   # Qt 이벤트 루프
 """
 
 import os
 import sys
-import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
@@ -31,16 +36,19 @@ logger = setup_logger("hana_api")
 
 _IS_WINDOWS = sys.platform == "win32"
 
+# ── PyQt5 가용성 ─────────────────────────────────────────────────────────────
+
 if _IS_WINDOWS:
     try:
-        import win32com.client
-        import pythoncom
-        _COM_AVAILABLE = True
+        from PyQt5.QAxContainer import QAxWidget
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import QEventLoop, QTimer
+        _QT_AVAILABLE = True
     except ImportError:
-        _COM_AVAILABLE = False
-        logger.warning("pywin32 미설치. pip install pywin32 후 재시도하세요.")
+        _QT_AVAILABLE = False
+        logger.warning("PyQt5 미설치. pip install PyQt5 후 재시도하세요.")
 else:
-    _COM_AVAILABLE = False
+    _QT_AVAILABLE = False
     logger.warning("Windows 환경이 아닙니다. API 기능이 제한됩니다.")
 
 
@@ -49,38 +57,31 @@ else:
 HANA_PROGID = "HFCOMMAGENT.HFCommAgentCtrl.1"
 
 # SetLoginMode(nOption=0, nMode)
-LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE = 0   # 국내/해외 실거래
-LOGIN_MODE_DOMESTIC_MOCK          = 1   # 국내 모의
-LOGIN_MODE_OVERSEAS_MOCK          = 2   # 해외 모의
-LOGIN_MODE_DOMESTIC_LIVE          = 3   # 국내 실거래
+LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE = 0
+LOGIN_MODE_DOMESTIC_MOCK          = 1
+LOGIN_MODE_OVERSEAS_MOCK          = 2
+LOGIN_MODE_DOMESTIC_LIVE          = 3
 
-# GetCommRecvOptionValue(nOptionType)
-OPT_TR_CODE       = 0
-OPT_PREV_NEXT_CODE = 1
-OPT_PREV_NEXT_KEY = 2
-OPT_MSG_CODE      = 3
-OPT_MSG           = 4
-OPT_SUB_MSG_CODE  = 5
-OPT_SUB_MSG       = 6
-OPT_ERROR         = 7
-OPT_SCREEN_NO     = 8
+# GetCommRecvOptionValue
+OPT_TR_CODE = 0
+OPT_ERROR   = 7
+OPT_MSG     = 4
 
-# 해외선물 서비스 코드
-TR_ACCOUNT_LIST   = "HHTACCNM01"    # 계좌목록조회
-TR_ORDER_NEW      = "OTS5901U01"    # 해외선물 일반주문(매수/매도)
-TR_ORDER_MODIFY   = "OTS5901U02"    # 정정주문
-TR_ORDER_CANCEL   = "OTS5901U03"    # 취소주문
-TR_POSITIONS      = "OTS5919Q41"    # 미결제약정현황(포지션)
-TR_FILLED         = "OTS5911Q52"    # 체결내역
-TR_UNFILLED       = "OTS5911Q41"    # 미체결내역
-TR_ORDERS_ALL     = "OTS5921Q41"    # 전체(체결+미체결)
-TR_DEPOSIT        = "OTS5943Q01"    # 예수금·증거금·통화별잔고
+# 해외선물 TR 코드
+TR_ACCOUNT_LIST = "HHTACCNM01"
+TR_ORDER_NEW    = "OTS5901U01"
+TR_ORDER_MODIFY = "OTS5901U02"
+TR_ORDER_CANCEL = "OTS5901U03"
+TR_POSITIONS    = "OTS5919Q41"
+TR_FILLED       = "OTS5911Q52"
+TR_UNFILLED     = "OTS5911Q41"
+TR_DEPOSIT      = "OTS5943Q01"
 
-REAL_TICK       = "V10"    # 해외선물 체결 (시세)
-REAL_ORDERBOOK  = "V11"    # 해외선물 호가
-REAL_EXEC       = "EF1"    # 주문체결 통보
-REAL_OPEN_POS   = "EF2"    # 미결제 통보
-REAL_UNFILLED   = "EF4"    # 미체결(정정/취소) 통보
+REAL_TICK      = "V10"
+REAL_ORDERBOOK = "V11"
+REAL_EXEC      = "EF1"
+REAL_OPEN_POS  = "EF2"
+REAL_UNFILLED  = "EF4"
 
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
@@ -91,441 +92,446 @@ class OrderResult:
     order_no: str = ""
     msg: str = ""
 
-    def __repr__(self):
-        return f"OrderResult(success={self.success}, order_no={self.order_no}, msg={self.msg})"
-
 
 @dataclass
 class Position:
-    symbol: str            # PRDT_CD
-    side: str              # "LONG"(B) / "SHORT"(S)
-    qty: int               # USTL_CTRC_QNT (미결제약정수량)
-    avg_price: float       # TRDE_AVR_UNPR
-    current_price: float   # ODRV_NOW_PRC
-    eval_pnl: float        # ODRV_EVL_PFLS_AMT (평가손익, 통화)
-    currency: str = ""     # CRRY_CD
-
-    def __repr__(self):
-        return (f"Position({self.symbol} {self.side} {self.qty}계약 "
-                f"평단={self.avg_price:.5f} 평가손익={self.eval_pnl:+.2f} {self.currency})")
+    symbol: str
+    side: str
+    qty: int
+    avg_price: float
+    current_price: float
+    eval_pnl: float
+    currency: str = ""
 
 
 @dataclass
 class AccountInfo:
-    total_asset_value: float      # TOT_ACC_ASST_VALU_AMT (총계정자산가치)
-    cash_balance: float           # THDT_CSH_BLCE (당일현금잔액)
-    order_available: float        # ODRV_ORDR_PSBL_AMT (주문가능금액)
-    maintenance_margin: float     # ODRV_MNTN_WMY (유지증거금)
-    withdrawable: float           # ODRV_WDRW_PSBL_AMT
+    total_asset_value: float
+    cash_balance: float
+    order_available: float
+    maintenance_margin: float
+    withdrawable: float
     currency: str = "USD"
 
 
-# ── 저수준 COM 래퍼 ───────────────────────────────────────────────────────────
+# ── Qt Application 싱글턴 ────────────────────────────────────────────────────
 
-class HanaOpenAPI:
-    """
-    HFCOMMAGENT.HFCommAgentCtrl.1 저수준 COM 래퍼.
+_qapp: Optional["QApplication"] = None
 
-    Tran 조회 패턴 (동기 request):
-        rows = api.request_tran(
-            tr_code="OTS5919Q41",
-            in_records=[
-                ("OTS5919Q41_in",       {"ODRV_SELL_BUY_DCD": ""}),
-                ("OTS5919Q41_in_sub01", {"CTNO": ctno, "APNO": apno, "PWD": pw_enc}),
-            ],
-            out_record="OTS5919Q41_out_sub01",
-            fields=["PRDT_CD", "ODRV_SELL_BUY_DCD", "USTL_CTRC_QNT", ...],
-        )
 
-    실시간 구독:
-        api.register_real("V10", "MGCQ26")
-        api.on_real_data = lambda name, key: ...   # OnGetRealData 시 호출
-    """
+def ensure_qapp() -> "QApplication":
+    """QAxWidget 생성 전 QApplication 이 반드시 존재해야 함."""
+    global _qapp
+    if not _QT_AVAILABLE:
+        raise RuntimeError("PyQt5 사용 불가 (설치 필요)")
+    if _qapp is None:
+        _qapp = QApplication.instance() or QApplication(sys.argv)
+    return _qapp
 
-    def __init__(self, progid: Optional[str] = None):
-        self.progid = progid or HANA_PROGID
-        self._api = None
-        self._connected = False
 
-        # 사용자 콜백
-        self.on_login: Optional[Callable[[bool], None]] = None
-        self.on_real_data: Optional[Callable[[str, str], None]] = None
-        self.on_agent_event: Optional[Callable[[int, int, str], None]] = None
+# ── 저수준 COM 래퍼 (QAxWidget) ──────────────────────────────────────────────
 
-        # 동기 Tran 요청 관리
-        self._pending_specs: Dict[int, dict] = {}   # rq_id → {out_record, fields, tr_code}
-        self._pending_events: Dict[int, threading.Event] = {}
-        self._tran_results: Dict[int, List[Dict[str, str]]] = {}
-        self._tran_errors: Dict[int, str] = {}
+if _QT_AVAILABLE:
 
-    # ── 연결 / 리소스 로드 ────────────────────────────────────────────────────
-
-    def connect(self, openapi_root: str) -> bool:
+    class HanaOpenAPI(QAxWidget):
         """
-        COM 컨트롤 생성 → CommInit → 리소스 파일 자동 로드.
-
-        openapi_root: 하나 OpenAPI 설치 루트 (예: "C:\\1QOpenAPI\\1Q OpenAPI\\1QApiAgent")
-                      아래에 TranRes/, RealRes/, System/comms.ini 가 있어야 함.
-
-        중요: CommInit 은 상대경로로 System/comms.ini 등을 찾으므로 반드시
-              현재 작업 디렉터리를 openapi_root 로 옮긴 뒤 호출한다.
+        HFCOMMAGENT ActiveX 를 QAxWidget 로 호스팅하는 저수준 래퍼.
+        Qt 이벤트 루프가 도는 상태에서 사용해야 함 (app.exec_()).
         """
-        if not _COM_AVAILABLE:
-            logger.error("COM API 사용 불가 (Windows + pywin32 확인).")
-            return False
 
-        if not os.path.isdir(openapi_root):
-            logger.error(f"openapi_root 경로 없음: {openapi_root}")
-            return False
+        def __init__(self, progid: Optional[str] = None):
+            ensure_qapp()
+            super().__init__()
+            self.progid = progid or HANA_PROGID
 
-        # ── 작업 디렉터리를 API 루트로 변경 (comms.ini 등 상대경로 검색) ─────
-        try:
-            self._orig_cwd = os.getcwd()
-            os.chdir(openapi_root)
-            logger.info(f"CWD 변경: {openapi_root}")
-        except Exception as e:
-            logger.error(f"CWD 변경 실패: {e}")
-            return False
+            logger.info(f"ActiveX setControl: {self.progid}")
+            if not self.setControl(self.progid):
+                raise RuntimeError(
+                    f"ActiveX 생성 실패: {self.progid} — "
+                    f"regHFCommAgent.bat 관리자권한 등록 확인"
+                )
+            logger.info("ActiveX 호스팅 성공 (QAxWidget)")
 
-        try:
-            pythoncom.CoInitialize()
-            logger.info(f"COM Dispatch: {self.progid}")
-            self._api = win32com.client.DispatchWithEvents(self.progid, _HanaEventHandler)
-            self._api._parent = self
-            logger.info("COM 컨트롤 생성 성공")
-        except Exception as e:
-            logger.error(f"COM Dispatch 실패: {e}. ProgID 또는 32비트 Python 확인.")
-            self._restore_cwd()
-            return False
+            self._orig_cwd: Optional[str] = None
 
-        # ── 사전 옵션 ────────────────────────────────────────────────────────
-        try:
-            self._api.SetOffAgentMessageBox(1)   # 팝업 방지 (CommInit 전 필수)
-            logger.debug("SetOffAgentMessageBox(1) OK")
-        except Exception as e:
-            logger.warning(f"SetOffAgentMessageBox 실패(계속 진행): {e}")
+            # 사용자 콜백
+            self.on_login: Optional[Callable[[bool], None]] = None
+            self.on_real_data: Optional[Callable[[str, str], None]] = None
+            self.on_agent_event: Optional[Callable[[int, int, str], None]] = None
 
-        # 해외 서비스용 초기설정 (v2.62 이상은 0=사용). 문서 4.1.7 ID 55 참조
-        try:
-            self._api.SetOptionalInitBox(0)
-            logger.debug("SetOptionalInitBox(0) OK")
-        except Exception as e:
-            logger.warning(f"SetOptionalInitBox 실패(계속 진행): {e}")
+            # 동기 Tran 관리
+            self._pending_specs: Dict[int, dict] = {}
+            self._pending_loops: Dict[int, "QEventLoop"] = {}
+            self._tran_results: Dict[int, List[Dict[str, str]]] = {}
+            self._tran_errors: Dict[int, str] = {}
 
-        # ── 통신 초기화 ──────────────────────────────────────────────────────
-        try:
-            ret = self._api.CommInit()
-        except Exception as e:
-            logger.error(f"CommInit 예외: {e}. 확인 사항:\n"
-                         f"  - {openapi_root} 아래 System/comms.ini 존재 여부\n"
-                         f"  - regHFCommAgent.bat 관리자권한 실행 완료 여부\n"
-                         f"  - vcredist_x86.exe 설치 완료 여부\n"
-                         f"  - Python 관리자권한으로 실행 중인지")
-            self._restore_cwd()
-            return False
+            self._connect_events()
 
-        if ret != 0:
-            logger.error(f"CommInit 실패 (ret={ret}): {self._last_err()}")
-            self._restore_cwd()
-            return False
-        logger.info("CommInit 성공")
+        # ── OCX 이벤트를 Qt 슬롯으로 연결 ────────────────────────────────────
 
-        self._load_all_resources(openapi_root)
-        return True
+        def _connect_events(self):
+            """COM 이벤트가 QAxWidget 에 시그널로 노출됨."""
+            handlers = [
+                ("OnGetTranData(int,QString,int)", self._slot_tran_data),
+                ("OnGetRealData(QString,QString,QString,int)", self._slot_real_data),
+                ("OnGetFidData(int,QString,int)", self._slot_fid_data),
+                ("OnAgentEventHandler(int,int,QString)", self._slot_agent_event),
+            ]
+            for sig, slot in handlers:
+                try:
+                    ok = self.connectSlot(sig, slot) if hasattr(self, "connectSlot") \
+                         else self._connect_by_name(sig, slot)
+                    if not ok:
+                        logger.warning(f"이벤트 연결 실패(무시): {sig}")
+                except Exception as e:
+                    logger.warning(f"이벤트 연결 예외 {sig}: {e}")
 
-    def _restore_cwd(self):
-        """CWD 원복 (오류 시)."""
-        if getattr(self, "_orig_cwd", None):
+        def _connect_by_name(self, sig: str, slot) -> bool:
+            """QAxWidget 이벤트를 시그니처 문자열로 연결."""
+            name = sig.split("(")[0]
             try:
-                os.chdir(self._orig_cwd)
+                getattr(self, name).connect(slot)
+                return True
+            except Exception:
+                pass
+            # 폴백 — QMetaObject 이용
+            try:
+                from PyQt5.QtCore import QMetaObject
+                idx = self.metaObject().indexOfSignal(sig)
+                if idx < 0:
+                    return False
+                self.connect(self, self.metaObject().method(idx),
+                             slot, type=0)
+                return True
+            except Exception:
+                return False
+
+        # ── OCX 메소드 호출 헬퍼 ──────────────────────────────────────────────
+
+        def _call(self, sig: str, *args):
+            """dynamicCall 로 OCX 메소드 호출."""
+            return self.dynamicCall(sig, list(args))
+
+        # ── 연결 / 리소스 로드 ────────────────────────────────────────────────
+
+        def connect_server(self, openapi_root: str) -> bool:
+            if not os.path.isdir(openapi_root):
+                logger.error(f"openapi_root 경로 없음: {openapi_root}")
+                return False
+
+            # CWD 를 API 루트로 변경 (comms.ini 등 상대경로 검색)
+            try:
+                self._orig_cwd = os.getcwd()
+                os.chdir(openapi_root)
+                logger.info(f"CWD 변경: {openapi_root}")
+            except Exception as e:
+                logger.error(f"CWD 변경 실패: {e}")
+                return False
+
+            # 팝업 방지 (CommInit 전 필수)
+            try:
+                self._call("SetOffAgentMessageBox(int)", 1)
+                logger.debug("SetOffAgentMessageBox OK")
+            except Exception as e:
+                logger.warning(f"SetOffAgentMessageBox: {e}")
+
+            # 해외 서비스 초기설정
+            try:
+                self._call("SetOptionalInitBox(int)", 0)
+                logger.debug("SetOptionalInitBox OK")
+            except Exception as e:
+                logger.warning(f"SetOptionalInitBox: {e}")
+
+            # 통신 초기화
+            try:
+                ret = self._call("CommInit()")
+            except Exception as e:
+                logger.error(
+                    f"CommInit 예외: {e}\n"
+                    f"  체크: openapi_root={openapi_root}\n"
+                    f"        System/comms.ini 존재? {os.path.exists('System/comms.ini')}\n"
+                    f"        regHFCommAgent.bat 등록 완료?\n"
+                    f"        vcredist_x86.exe 설치 완료?\n"
+                    f"        Python 관리자권한 실행?"
+                )
+                self._restore_cwd()
+                return False
+
+            if int(ret or 0) != 0:
+                logger.error(f"CommInit 실패 ret={ret}: {self._last_err()}")
+                self._restore_cwd()
+                return False
+            logger.info("CommInit 성공")
+
+            self._load_all_resources(openapi_root)
+            return True
+
+        def _load_all_resources(self, openapi_root: str):
+            for sub, meth in [("TranRes", "LoadTranResource(const QString&)"),
+                              ("RealRes", "LoadRealResource(const QString&)")]:
+                dpath = os.path.join(openapi_root, sub)
+                if not os.path.isdir(dpath):
+                    logger.warning(f"리소스 폴더 없음: {dpath}")
+                    continue
+                n = 0
+                for fname in os.listdir(dpath):
+                    if fname.lower().endswith(".res"):
+                        fpath = os.path.join(dpath, fname)
+                        ret = self._call(meth, fpath)
+                        if int(ret or 0) == 1:
+                            n += 1
+                        else:
+                            logger.warning(f"{sub} 로드 실패: {fname}")
+                logger.info(f"{sub} {n}개 리소스 로드")
+
+        def _restore_cwd(self):
+            if self._orig_cwd:
+                try:
+                    os.chdir(self._orig_cwd)
+                except Exception:
+                    pass
+
+        def disconnect(self):
+            try:
+                self._call("CommTerminate(int)", 1)
+            except Exception:
+                pass
+            self._restore_cwd()
+            logger.info("API 연결 해제")
+
+        # ── 로그인 ────────────────────────────────────────────────────────────
+
+        def set_login_mode(self, mode: int):
+            self._call("SetLoginMode(int,int)", 0, mode)
+            logger.info(f"SetLoginMode(0, {mode})")
+
+        def login(self, user_id: str, password: str, cert_pw: str) -> bool:
+            ret = self._call("CommLogin(const QString&,const QString&,const QString&)",
+                             user_id, password, cert_pw)
+            ok = int(ret or 0) == 1
+            logger.info("공동인증서 로그인 " + ("성공" if ok else f"실패: {self._last_err()}"))
+            if self.on_login:
+                self.on_login(ok)
+            return ok
+
+        def login_cloud_cert(self, user_id: str) -> bool:
+            ret = self._call("CommCloudCert(const QString&)", user_id)
+            ok = int(ret or 0) == 1
+            logger.info("클라우드인증서 로그인 " + ("성공" if ok else f"실패: {self._last_err()}"))
+            if self.on_login:
+                self.on_login(ok)
+            return ok
+
+        def logout(self, user_id: str) -> bool:
+            return int(self._call("CommLogout(const QString&)", user_id) or 0) == 0
+
+        def is_logged_in(self) -> bool:
+            try:
+                return int(self._call("GetLoginState()") or 0) == 1
+            except Exception:
+                return False
+
+        def is_connected(self) -> bool:
+            try:
+                return int(self._call("CommGetConnectState()") or 0) == 1
+            except Exception:
+                return False
+
+        def get_account_count(self) -> int:
+            return int(self._call("GetUserAccCnt()") or 0)
+
+        def get_account_no(self, index: int = 0) -> str:
+            return str(self._call("GetUserAccNo(int)", index) or "").strip()
+
+        def encrypt(self, plaintext: str) -> str:
+            return str(self._call("GetEncrpyt(const QString&)", plaintext) or "")
+
+        # ── Tran 조회 (동기 QEventLoop) ───────────────────────────────────────
+
+        def request_tran(self,
+                         tr_code: str,
+                         in_records: List[tuple],
+                         out_record: str,
+                         fields: List[str],
+                         tran_type: str = "Q",
+                         screen_no: str = "9999",
+                         request_count: int = 20,
+                         prev_or_next: str = "0",
+                         prev_next_key: str = "",
+                         is_benefit: str = "Y",
+                         timeout: float = 10.0
+                         ) -> Optional[List[Dict[str, str]]]:
+            rq_id = int(self._call("CreateRequestID()") or 0)
+            if rq_id <= 0:
+                logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
+                return None
+
+            for rec_name, inputs in in_records:
+                for item, value in inputs.items():
+                    self._call(
+                        "SetTranInputData(int,const QString&,const QString&,"
+                        "const QString&,const QString&)",
+                        rq_id, tr_code, rec_name, item, str(value),
+                    )
+
+            loop = QEventLoop()
+            self._pending_specs[rq_id] = {
+                "tr_code": tr_code, "out_record": out_record, "fields": fields,
+            }
+            self._pending_loops[rq_id] = loop
+
+            ret = self._call(
+                "RequestTran(int,const QString&,const QString&,const QString&,"
+                "const QString&,const QString&,const QString&,int)",
+                rq_id, tr_code, is_benefit, prev_or_next,
+                prev_next_key, screen_no, tran_type, request_count,
+            )
+            if int(ret or 0) <= 0:
+                logger.error(f"RequestTran 실패 {tr_code} ret={ret}: {self._last_err()}")
+                self._cleanup(rq_id)
+                return None
+
+            # 타임아웃 타이머
+            QTimer.singleShot(int(timeout * 1000), loop.quit)
+            loop.exec_()
+
+            rows = self._tran_results.pop(rq_id, None)
+            err = self._tran_errors.pop(rq_id, "")
+            self._cleanup(rq_id)
+            if err and err != "0":
+                logger.warning(f"Tran 오류 ({tr_code}): {err}")
+            return rows
+
+        def _cleanup(self, rq_id: int):
+            self._pending_specs.pop(rq_id, None)
+            self._pending_loops.pop(rq_id, None)
+            try:
+                self._call("ReleaseRqId(int)", rq_id)
             except Exception:
                 pass
 
-    def _load_all_resources(self, openapi_root: str):
-        """openapi_root/TranRes, openapi_root/RealRes 아래 *.res 전부 로드."""
-        for sub, loader in [("TranRes", self._api.LoadTranResource),
-                            ("RealRes", self._api.LoadRealResource)]:
-            dpath = os.path.join(openapi_root, sub)
-            if not os.path.isdir(dpath):
-                logger.warning(f"리소스 폴더 없음: {dpath}")
-                continue
-            n = 0
-            for fname in os.listdir(dpath):
-                if fname.lower().endswith(".res"):
-                    fpath = os.path.join(dpath, fname)
-                    ret = loader(fpath)
-                    if ret == 1:
-                        n += 1
-                    else:
-                        logger.warning(f"{sub} 로드 실패: {fname}")
-            logger.info(f"{sub} {n}개 리소스 로드")
+        # ── 실시간 ────────────────────────────────────────────────────────────
 
-    def disconnect(self):
-        if self._api:
+        def register_real(self, real_name: str, real_key: str) -> bool:
+            ret = self._call("RegisterReal(const QString&,const QString&)",
+                             real_name, real_key)
+            ok = int(ret or 0) == 0
+            (logger.info if ok else logger.warning)(
+                f"실시간 {'등록' if ok else '등록실패'}: {real_name}/{real_key}"
+            )
+            return ok
+
+        def unregister_real(self, real_name: str, real_key: str) -> bool:
+            return int(self._call("UnRegisterReal(const QString&,const QString&)",
+                                  real_name, real_key) or 0) == 1
+
+        def all_unregister_real(self) -> bool:
+            return int(self._call("AllUnRegisterReal()") or 0) == 1
+
+        def get_real_output(self, real_name: str, item_name: str) -> str:
             try:
-                self._api.CommTerminate(1)
+                return str(self._call(
+                    "GetRealOutputData(const QString&,const QString&)",
+                    real_name, item_name,
+                ) or "").strip()
             except Exception:
-                pass
-        self._connected = False
-        logger.info("API 연결 해제")
+                return ""
 
-    # ── 로그인 ─────────────────────────────────────────────────────────────────
+        # ── 이벤트 슬롯 ───────────────────────────────────────────────────────
 
-    def set_login_mode(self, mode: int):
-        """mode: 0=국내/해외실거래, 1=국내모의, 2=해외모의, 3=국내실거래"""
-        self._api.SetLoginMode(0, mode)
-        logger.info(f"SetLoginMode(0, {mode})")
+        def _slot_tran_data(self, rq_id, pBlock, nBlockLength):
+            spec = self._pending_specs.get(rq_id)
+            if not spec:
+                return
 
-    def login(self, user_id: str, password: str, cert_pw: str) -> bool:
-        """공동인증서 로그인. 반환: 1=성공, 0=실패."""
-        ret = self._api.CommLogin(user_id, password, cert_pw)
-        ok = (ret == 1)
-        self._connected = ok
-        if ok:
-            logger.info("공동인증서 로그인 성공")
-        else:
-            logger.error(f"공동인증서 로그인 실패: {self._last_err()}")
-        if self.on_login:
-            self.on_login(ok)
-        return ok
+            tr_code = spec["tr_code"]
+            out_record = spec["out_record"]
+            fields = spec["fields"]
 
-    def login_cloud_cert(self, user_id: str) -> bool:
-        """클라우드인증서 로그인. 반환: 1=성공, 0=실패."""
-        ret = self._api.CommCloudCert(user_id)
-        ok = (ret == 1)
-        self._connected = ok
-        if ok:
-            logger.info("클라우드인증서 로그인 성공")
-        else:
-            logger.error(f"클라우드인증서 로그인 실패: {self._last_err()}")
-        if self.on_login:
-            self.on_login(ok)
-        return ok
+            error = self._get_opt(OPT_ERROR)
+            msg = self._get_opt(OPT_MSG)
 
-    def logout(self, user_id: str) -> bool:
-        return self._api.CommLogout(user_id) == 0
-
-    def is_logged_in(self) -> bool:
-        try:
-            return self._api.GetLoginState() == 1
-        except Exception:
-            return False
-
-    def is_connected(self) -> bool:
-        try:
-            return self._api.CommGetConnectState() == 1
-        except Exception:
-            return False
-
-    def get_account_count(self) -> int:
-        return int(self._api.GetUserAccCnt())
-
-    def get_account_no(self, index: int = 0) -> str:
-        return self._api.GetUserAccNo(index).strip()
-
-    def encrypt(self, plaintext: str) -> str:
-        """계좌비밀번호 등 암호화. 하나 API는 PWD 필드에 암호문 전달."""
-        return self._api.GetEncrpyt(plaintext)
-
-    # ── Tran 조회 (동기) ──────────────────────────────────────────────────────
-
-    def request_tran(self,
-                     tr_code: str,
-                     in_records: List[tuple],       # [(rec_name, {ITEM: value}), ...]
-                     out_record: str,
-                     fields: List[str],
-                     tran_type: str = "Q",
-                     screen_no: str = "9999",
-                     request_count: int = 20,
-                     prev_or_next: str = "0",
-                     prev_next_key: str = "",
-                     is_benefit: str = "Y",
-                     timeout: float = 10.0
-                     ) -> Optional[List[Dict[str, str]]]:
-        """
-        Tran 조회/주문 요청 후 응답 이벤트를 대기해서 결과 반환.
-
-        tran_type: "Q"=조회, "U"=Update(주문)
-        반환: 응답 row 리스트 (각 row는 {필드명: 값} 딕셔너리), 실패 시 None
-        """
-        rq_id = self._api.CreateRequestID()
-        if rq_id <= 0:
-            logger.error(f"CreateRequestID 실패 (rq_id={rq_id})")
-            return None
-
-        # 입력값 셋
-        for rec_name, inputs in in_records:
-            for item, value in inputs.items():
-                self._api.SetTranInputData(rq_id, tr_code, rec_name, item, str(value))
-
-        # 응답 처리 스펙 등록
-        event = threading.Event()
-        self._pending_specs[rq_id] = {
-            "tr_code": tr_code, "out_record": out_record, "fields": fields,
-        }
-        self._pending_events[rq_id] = event
-
-        ret = self._api.RequestTran(rq_id, tr_code, is_benefit, prev_or_next,
-                                     prev_next_key, screen_no, tran_type,
-                                     request_count)
-        if ret <= 0:
-            logger.error(f"RequestTran 실패 ({tr_code}, ret={ret}): {self._last_err()}")
-            self._cleanup_request(rq_id)
-            return None
-
-        if not event.wait(timeout=timeout):
-            logger.error(f"RequestTran 타임아웃 ({tr_code}, {timeout}s)")
-            self._cleanup_request(rq_id)
-            return None
-
-        rows = self._tran_results.pop(rq_id, None)
-        err = self._tran_errors.pop(rq_id, "")
-        self._cleanup_request(rq_id)
-
-        if err and err != "0":
-            logger.error(f"Tran 오류 ({tr_code}): {err}")
-        return rows
-
-    def _cleanup_request(self, rq_id: int):
-        self._pending_specs.pop(rq_id, None)
-        self._pending_events.pop(rq_id, None)
-        try:
-            self._api.ReleaseRqId(rq_id)
-        except Exception:
-            pass
-
-    # ── 실시간 등록/해제 ──────────────────────────────────────────────────────
-
-    def register_real(self, real_name: str, real_key: str) -> bool:
-        """
-        real_name: 실시간 서비스 코드 (V10 등)
-        real_key : 구분키 (해외선물 종목코드 등)
-        """
-        ret = self._api.RegisterReal(real_name, real_key)
-        ok = (ret == 0)
-        if ok:
-            logger.info(f"실시간 등록: {real_name}/{real_key}")
-        else:
-            logger.warning(f"실시간 등록 실패 ({real_name}/{real_key}): {self._last_err()}")
-        return ok
-
-    def unregister_real(self, real_name: str, real_key: str) -> bool:
-        return self._api.UnRegisterReal(real_name, real_key) == 1
-
-    def all_unregister_real(self) -> bool:
-        return self._api.AllUnRegisterReal() == 1
-
-    def get_real_output(self, real_name: str, item_name: str) -> str:
-        """OnGetRealData 콜백 안에서만 호출."""
-        try:
-            return self._api.GetRealOutputData(real_name, item_name).strip()
-        except Exception as e:
-            logger.warning(f"GetRealOutputData 오류 {real_name}/{item_name}: {e}")
-            return ""
-
-    # ── 이벤트 핸들러 (EventHandler → 부모) ────────────────────────────────────
-
-    def _on_tran_data(self, rq_id: int, pBlock, nBlockLength):
-        spec = self._pending_specs.get(rq_id)
-        if not spec:
-            logger.debug(f"미등록 rq_id 응답 무시: {rq_id}")
-            return
-
-        tr_code = spec["tr_code"]
-        out_record = spec["out_record"]
-        fields = spec["fields"]
-
-        error = self._get_opt(OPT_ERROR)
-        msg = self._get_opt(OPT_MSG)
-
-        rows: List[Dict[str, str]] = []
-        try:
-            count = self._api.GetTranOutputRowCnt(tr_code, out_record)
-            for i in range(count):
-                row = {}
-                for f in fields:
-                    v = self._api.GetTranOutputData(tr_code, out_record, f, i)
-                    row[f] = (v or "").strip()
-                rows.append(row)
-        except Exception as e:
-            logger.error(f"Tran 응답 파싱 오류({tr_code}/{out_record}): {e}", exc_info=True)
-
-        self._tran_results[rq_id] = rows
-        self._tran_errors[rq_id] = error
-        if msg:
-            logger.debug(f"Tran 메시지 [{tr_code}] {msg}")
-
-        event = self._pending_events.get(rq_id)
-        if event:
-            event.set()
-
-    def _on_real_data(self, real_name: str, real_key: str, pBlock, nBlockLength):
-        if self.on_real_data:
+            rows: List[Dict[str, str]] = []
             try:
-                self.on_real_data(real_name, real_key)
+                count = int(self._call(
+                    "GetTranOutputRowCnt(const QString&,const QString&)",
+                    tr_code, out_record,
+                ) or 0)
+                for i in range(count):
+                    row = {}
+                    for f in fields:
+                        v = self._call(
+                            "GetTranOutputData(const QString&,const QString&,"
+                            "const QString&,int)",
+                            tr_code, out_record, f, i,
+                        )
+                        row[f] = (str(v) if v is not None else "").strip()
+                    rows.append(row)
             except Exception as e:
-                logger.error(f"on_real_data 콜백 오류: {e}", exc_info=True)
+                logger.error(f"Tran 파싱 오류 {tr_code}/{out_record}: {e}", exc_info=True)
 
-    def _on_agent_event(self, event_type: int, param: int, str_param: str):
-        # 100번대: 통신 이벤트, 150번대: 공지 이벤트
-        logger.info(f"AgentEvent type={event_type} param={param} strParam={str_param}")
-        if self.on_agent_event:
+            self._tran_results[rq_id] = rows
+            self._tran_errors[rq_id] = error
+            if msg:
+                logger.debug(f"Tran msg [{tr_code}] {msg}")
+
+            loop = self._pending_loops.get(rq_id)
+            if loop:
+                loop.quit()
+
+        def _slot_real_data(self, real_name, real_key, pBlock, nBlockLength):
+            if self.on_real_data:
+                try:
+                    self.on_real_data(str(real_name), str(real_key))
+                except Exception as e:
+                    logger.error(f"on_real_data 콜백 오류: {e}", exc_info=True)
+
+        def _slot_fid_data(self, rq_id, pBlock, nBlockLength):
+            pass  # 필요 시 확장
+
+        def _slot_agent_event(self, event_type, param, str_param):
+            logger.info(f"AgentEvent type={event_type} param={param} str={str_param}")
+            if self.on_agent_event:
+                try:
+                    self.on_agent_event(int(event_type), int(param), str(str_param))
+                except Exception as e:
+                    logger.error(f"on_agent_event 콜백 오류: {e}", exc_info=True)
+
+        # ── 유틸 ──────────────────────────────────────────────────────────────
+
+        def _get_opt(self, opt_type: int) -> str:
             try:
-                self.on_agent_event(event_type, param, str_param)
-            except Exception as e:
-                logger.error(f"on_agent_event 콜백 오류: {e}", exc_info=True)
+                return str(self._call(
+                    "GetCommRecvOptionValue(int)", opt_type,
+                ) or "").strip()
+            except Exception:
+                return ""
 
-    # ── 부가 유틸 ─────────────────────────────────────────────────────────────
+        def _last_err(self) -> str:
+            try:
+                return str(self._call("GetLastErrMsg()") or "")
+            except Exception:
+                return ""
 
-    def _get_opt(self, opt_type: int) -> str:
-        try:
-            return (self._api.GetCommRecvOptionValue(opt_type) or "").strip()
-        except Exception:
-            return ""
+else:
 
-    def _last_err(self) -> str:
-        try:
-            return self._api.GetLastErrMsg() or ""
-        except Exception:
-            return ""
-
-
-# ── COM 이벤트 핸들러 ─────────────────────────────────────────────────────────
-
-class _HanaEventHandler:
-    """
-    DispatchWithEvents 로 연결되는 이벤트 핸들러.
-    각 이벤트를 _parent(HanaOpenAPI) 로 위임.
-    """
-    _parent: Optional[HanaOpenAPI] = None
-
-    def OnGetTranData(self, nRequestId, pBlock, nBlockLength):
-        if self._parent:
-            self._parent._on_tran_data(nRequestId, pBlock, nBlockLength)
-
-    def OnGetFidData(self, nRequestId, pBlock, nBlockLength):
-        # FID 조회는 현재 봇에서 미사용 (필요 시 확장)
-        pass
-
-    def OnGetRealData(self, strRealName, strRealKey, pBlock, nBlockLength):
-        if self._parent:
-            self._parent._on_real_data(strRealName, strRealKey, pBlock, nBlockLength)
-
-    def OnAgentEventHandler(self, nEventType, nParam, strParam):
-        if self._parent:
-            self._parent._on_agent_event(nEventType, nParam, strParam)
+    class HanaOpenAPI:   # 폴백 — 논-Windows 환경에서 import 만 되도록
+        def __init__(self, *_, **__):
+            raise RuntimeError("PyQt5/Windows 환경 필요")
 
 
 # ── 상위: 해외선물 매매 클라이언트 ────────────────────────────────────────────
 
-def _safe_float(s: str, default: float = 0.0) -> float:
+def _safe_float(s, default: float = 0.0) -> float:
+    if s is None:
+        return default
     try:
-        return float(s.replace(",", "").strip()) if s else default
+        return float(str(s).replace(",", "").strip() or default)
     except (ValueError, AttributeError):
         return default
 
 
-def _safe_int(s: str, default: int = 0) -> int:
+def _safe_int(s, default: int = 0) -> int:
     try:
         return int(_safe_float(s, default))
     except (ValueError, TypeError):
@@ -533,37 +539,26 @@ def _safe_int(s: str, default: int = 0) -> int:
 
 
 class HanaFuturesClient:
-    """
-    해외선물 매매 상위 클라이언트.
-    HanaOpenAPI 저수준 래퍼 위에서 semantic method (send_order/get_positions 등) 제공.
+    """해외선물 매매 상위 API."""
 
-    계좌번호 형식: "12345678-01" 또는 "12345678-220" 등
-      - 종합계좌대체번호(CTNO) 8자리(또는 9자리)
-      - 계좌상품번호(APNO) 뒤 2~3자리
-    """
-
-    def __init__(self, api: HanaOpenAPI, account_no: str, account_pw: str,
+    def __init__(self, api: "HanaOpenAPI", account_no: str, account_pw: str,
                  user_id: str = ""):
         self.api = api
         self.account_no = account_no
         self.account_pw = account_pw
         self.user_id = user_id
 
-        # 계좌번호 파싱
         self.ctno, self.apno = self._parse_account(account_no)
-        # 비밀번호 암호화 (API 요구사항)
-        self._pw_enc: str = ""   # login 이후에 encrypt 가능
+        self._pw_enc: str = ""
 
-        # 사용자 콜백 (tick/체결)
         self.on_tick: Optional[Callable[[str, float, int, datetime], None]] = None
         self.on_order_execution: Optional[Callable[[dict], None]] = None
 
-        # 라우팅
         self.api.on_real_data = self._route_real_data
         self._subscribed_ticks: set = set()
 
     @staticmethod
-    def _parse_account(account_no: str) -> "tuple[str, str]":
+    def _parse_account(account_no: str):
         parts = account_no.replace(" ", "").split("-")
         if len(parts) == 2:
             ctno, apno = parts
@@ -572,19 +567,18 @@ class HanaFuturesClient:
         return ctno.zfill(9), apno.zfill(3)
 
     def prepare(self):
-        """로그인 이후 호출 — 비밀번호 암호화 준비."""
         self._pw_enc = self.api.encrypt(self.account_pw)
-        logger.info(f"[해외선물 클라이언트] 계좌 준비 ctno={self.ctno} apno={self.apno}")
+        logger.info(f"[해외선물] 준비 ctno={self.ctno} apno={self.apno}")
 
-    # ── 계좌·잔고·포지션 ──────────────────────────────────────────────────────
+    # ── 조회 ──────────────────────────────────────────────────────────────────
 
     def get_account_list(self) -> List[Dict[str, str]]:
         return self.api.request_tran(
             tr_code=TR_ACCOUNT_LIST,
             in_records=[
                 ("HHTACCNM01_InRec1", {
-                    "func": "1", "usid": self.user_id, "errc": "",
-                    "emsg": "", "nrec": "0",
+                    "func": "1", "usid": self.user_id,
+                    "errc": "", "emsg": "", "nrec": "0",
                 }),
             ],
             out_record="HHTACCNM01_out_sub01",
@@ -595,7 +589,7 @@ class HanaFuturesClient:
         rows = self.api.request_tran(
             tr_code=TR_POSITIONS,
             in_records=[
-                ("OTS5919Q41_in", {"ODRV_SELL_BUY_DCD": ""}),   # 빈값=전체
+                ("OTS5919Q41_in", {"ODRV_SELL_BUY_DCD": ""}),
                 ("OTS5919Q41_in_sub01", {
                     "CTNO": self.ctno, "APNO": self.apno, "PWD": self._pw_enc,
                 }),
@@ -614,8 +608,7 @@ class HanaFuturesClient:
             side_cd = r.get("ODRV_SELL_BUY_DCD", "")
             side = "LONG" if side_cd == "B" else "SHORT" if side_cd == "S" else side_cd
             positions.append(Position(
-                symbol=r.get("PRDT_CD", ""),
-                side=side, qty=abs(qty),
+                symbol=r.get("PRDT_CD", ""), side=side, qty=abs(qty),
                 avg_price=_safe_float(r.get("TRDE_AVR_UNPR")),
                 current_price=_safe_float(r.get("ODRV_NOW_PRC")),
                 eval_pnl=_safe_float(r.get("ODRV_EVL_PFLS_AMT")),
@@ -624,7 +617,6 @@ class HanaFuturesClient:
         return positions
 
     def get_deposit(self) -> List[Dict[str, str]]:
-        """예수금·증거금 상세 (통화별 원시 데이터)."""
         return self.api.request_tran(
             tr_code=TR_DEPOSIT,
             in_records=[
@@ -657,36 +649,20 @@ class HanaFuturesClient:
     def send_order(self, symbol: str, side: str, qty: int,
                    price: Optional[float] = None, prc_type: str = "MARKET",
                    stop_loss: Optional[float] = None) -> OrderResult:
-        """
-        해외선물 신규 주문.
-
-        Args:
-            symbol   : 주문 종목코드 (예: "MGCQ26")
-            side     : "BUY" 또는 "SELL"
-            qty      : 계약 수
-            price    : 지정가 (MARKET 이면 무시)
-            prc_type : "MARKET" / "LIMIT" / "STOP" / "STOP_LIMIT"
-            stop_loss: STOP 계열 주문 시 발동가
-
-        Returns:
-            OrderResult(success, order_no, msg)
-        """
-        # 필드값 매핑 — EF1 실시간 통보의 매핑 문서 기준
         sell_buy = {"BUY": "B", "SELL": "S"}.get(side.upper())
         if sell_buy is None:
             return OrderResult(False, msg=f"잘못된 side: {side}")
 
         prc_cnd = {
-            "LIMIT":      "1",   # 지정가
-            "MARKET":     "2",   # 시장가
-            "STOP":       "3",   # STOP MARKET
-            "STOP_LIMIT": "4",   # STOP LIMIT
+            "LIMIT": "1", "MARKET": "2", "STOP": "3", "STOP_LIMIT": "4",
         }.get(prc_type.upper())
         if prc_cnd is None:
             return OrderResult(False, msg=f"잘못된 prc_type: {prc_type}")
 
-        prc_str = "0" if prc_type.upper() == "MARKET" else f"{price or 0:.10f}".rstrip("0").rstrip(".")
-        stop_str = f"{stop_loss or 0:.10f}".rstrip("0").rstrip(".") if stop_loss else "0"
+        prc_str = "0" if prc_type.upper() == "MARKET" else \
+                  f"{price or 0:.10f}".rstrip("0").rstrip(".")
+        stop_str = (f"{stop_loss or 0:.10f}".rstrip("0").rstrip(".")
+                    if stop_loss else "0")
 
         rows = self.api.request_tran(
             tr_code=TR_ORDER_NEW,
@@ -699,21 +675,17 @@ class HanaFuturesClient:
                     "ODRV_ORDR_PRC": prc_str,
                     "ORDR_QNT": str(qty),
                     "STLS_APPN_PRC": stop_str,
-                    "ORDR_HND_DCD": "1",     # 신규
-                    "ORDR_DCD": "1",         # 신규주문
-                    "ETC_ORDR_DCD": "",
-                    "CNCS_CND_DCD": "1",     # 체결조건 FAS 기본
-                    "CLR_PST_NO": "",
-                    "ORDR_EXPR_DT": "",
+                    "ORDR_HND_DCD": "1", "ORDR_DCD": "1",
+                    "ETC_ORDR_DCD": "", "CNCS_CND_DCD": "1",
+                    "CLR_PST_NO": "", "ORDR_EXPR_DT": "",
                 }),
             ],
             out_record="OTS5901U01_out",
             fields=["ODRV_ODNO"],
-            tran_type="U",       # 주문은 Update
-            is_benefit="Y",
+            tran_type="U", is_benefit="Y",
         )
         if not rows:
-            return OrderResult(False, msg="주문 응답 없음(타임아웃/에러)")
+            return OrderResult(False, msg="주문 응답 없음")
         order_no = rows[0].get("ODRV_ODNO", "").strip()
         return OrderResult(success=bool(order_no), order_no=order_no,
                            msg="접수" if order_no else "주문번호 없음")
@@ -736,7 +708,7 @@ class HanaFuturesClient:
             return OrderResult(False, msg="취소 응답 없음")
         return OrderResult(True, order_no=rows[0].get("ODRV_ODNO", ""), msg="취소 접수")
 
-    # ── 실시간 시세 / 체결통보 ────────────────────────────────────────────────
+    # ── 실시간 ────────────────────────────────────────────────────────────────
 
     def subscribe_tick(self, symbol: str) -> bool:
         if symbol in self._subscribed_ticks:
@@ -752,7 +724,6 @@ class HanaFuturesClient:
         return ok
 
     def subscribe_execution(self) -> bool:
-        """주문 체결 통보(EF1) 구독. real_key 는 사용자ID."""
         return self.api.register_real(REAL_EXEC, self.user_id or self.ctno)
 
     def _route_real_data(self, real_name: str, real_key: str):
@@ -761,7 +732,7 @@ class HanaFuturesClient:
         elif real_name == REAL_EXEC:
             self._emit_execution(real_key)
         else:
-            logger.debug(f"실시간 미처리 이벤트 {real_name}/{real_key}")
+            logger.debug(f"실시간 미처리 {real_name}/{real_key}")
 
     def _emit_tick(self, symbol: str):
         price = _safe_float(self.api.get_real_output(REAL_TICK, "TRDPRC_1"))
@@ -774,7 +745,6 @@ class HanaFuturesClient:
     def _emit_execution(self, key: str):
         if not self.on_order_execution:
             return
-        # EF1 주요 필드 추출
         data = {
             "notify_type": self.api.get_real_output(REAL_EXEC, "rltm_dpch_dcd"),
             "prcs_type":   self.api.get_real_output(REAL_EXEC, "rltm_dpch_prcs_dcd"),
@@ -789,7 +759,7 @@ class HanaFuturesClient:
         try:
             self.on_order_execution(data)
         except Exception as e:
-            logger.error(f"on_order_execution 콜백 오류: {e}", exc_info=True)
+            logger.error(f"on_order_execution 오류: {e}", exc_info=True)
 
     @staticmethod
     def _parse_ktime(hhmmss: str) -> Optional[datetime]:
