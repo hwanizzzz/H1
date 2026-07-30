@@ -169,12 +169,25 @@ def main():
 
     print("\n" + "=" * 70)
     if success:
+        # HFCOMMAGENT(매매 API) 를 우선 추천, HANACHART(차트 컨트롤) 은 별개
+        trading = [p for p in success if p.upper().startswith("HFCOMM")]
+        chart_only = [p for p in success if p.upper().startswith("HANACHART")]
+        other = [p for p in success if p not in trading and p not in chart_only]
+
         print(" 사용 가능한 ProgID:")
-        for p in success:
-            print(f"   {p}")
-        print("\n 다음 단계 — config/config.local.yaml 의 api 블록에 추가:")
+        for p in trading:
+            print(f"   ★ {p}   (매매 API — 이걸 쓰세요)")
+        for p in other:
+            print(f"     {p}")
+        for p in chart_only:
+            print(f"     {p}   (차트 컨트롤 — 매매 불가, 참고용)")
+
+        recommend = trading[0] if trading else success[0]
+        print("\n 다음 단계 — config/config.local.yaml 의 api 블록:")
         print(f"   api:")
-        print(f"     progid: \"{success[0]}\"")
+        print(f"     progid: \"{recommend}\"")
+        if trading:
+            print("\n   (config.yaml 기본값과 동일하면 별도 지정 불필요)")
     elif unique:
         print(" 하나증권 관련 후보는 발견됐지만, Dispatch 테스트 결과는 아래를 확인:")
         if bits == 64:
