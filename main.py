@@ -23,7 +23,7 @@ from risk.risk_manager import RiskManager, SymbolSpec
 from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
 from utils.logger import setup_logger
-from utils.safety import validate_account_safety, AccountSafetyError
+from utils.safety import validate_account_safety, AccountSafetyError, validate_python_bits
 from utils.config_loader import load_config
 
 logger = setup_logger("main")
@@ -103,6 +103,7 @@ class TradingEngine:
 
 
 def main():
+    validate_python_bits()
     config = load_config()
     try:
         validate_account_safety(config)

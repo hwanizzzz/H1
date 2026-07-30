@@ -1,5 +1,7 @@
 """
-계좌 안전 검증 — 휴먼 에러로 인한 실계좌 사고 방지
+안전 검증 모음
+  - validate_python_bits: 32비트 Python 아닌 경우 경고
+  - validate_account_safety: 계좌 안전 검증(모의/실계좌 사고 방지)
 
 시작 시 api.account_no 와 is_mock 의 일관성을 검사한다.
 
@@ -16,6 +18,9 @@
   - 등록되지 않은 알 수 없는 계좌번호 사용 차단
 """
 
+import struct
+import sys
+
 from utils.logger import setup_logger
 
 logger = setup_logger("safety")
@@ -23,6 +28,22 @@ logger = setup_logger("safety")
 
 class AccountSafetyError(RuntimeError):
     pass
+
+
+def validate_python_bits() -> None:
+    """
+    32비트 Python 아닐 경우 경고를 로그로 남긴다(치명적이지 않아 실행은 계속).
+    한국 증권사 OCX 는 대부분 32비트 전용이라 64비트 Python 에서는
+    COM Dispatch 가 실패한다(-2147221164 Class not registered).
+    """
+    bits = struct.calcsize("P") * 8
+    if bits != 32 and sys.platform == "win32":
+        logger.warning(
+            f"현재 Python: {sys.version.split()[0]} ({bits}bit).\n"
+            f"한국 증권사 OCX 는 대부분 32비트 전용입니다. "
+            f"COM 접속이 실패할 가능성이 높습니다.\n"
+            f"32비트 Python 설치 권장: https://www.python.org/downloads/windows/"
+        )
 
 
 def validate_account_safety(config: dict) -> None:

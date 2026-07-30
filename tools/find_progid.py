@@ -2,16 +2,19 @@
 하나증권 1Q OpenAPI COM ProgID 찾기 도구 (Windows 전용)
 
 사용:
-  python tools/find_progid.py
+  python tools/find_progid.py            # 하나 관련 후보만 나열
+  python tools/find_progid.py --dispatch # 각 후보를 실제 Dispatch 로 검증
+  python tools/find_progid.py --all      # 필터 없이 전체(디버그용)
 
-동작:
-  1) 레지스트리 HKCR 에서 "하나 / hana / 1Q / H1 / OPEN" 관련 ProgID 후보 스캔
-  2) Program Files 아래 하나증권 관련 OCX 파일 검색
-  3) 각 후보를 실제로 Dispatch 시도해 로딩 가능한지 표시
-  4) 성공한 ProgID 를 config.local.yaml 의 api.progid 에 넣으면 됨
+주의:
+  한국 증권사 OCX 대부분이 32비트 전용입니다.
+  64비트 Python 에서는 로드에 실패합니다 (-2147221164 = Class not registered).
+  이 도구는 시작 시 Python 비트를 표시합니다.
 """
 
+import argparse
 import os
+import struct
 import sys
 import glob
 
@@ -24,112 +27,169 @@ except ImportError:
     sys.exit(1)
 
 
-KEYWORDS = ("hana", "1q", "h1", "one", "openapi")
-EXCLUDE = ("wow64", "clsid", "typelib", "interface", "component categories")
+# 하나증권 COM 클래스에서 실제로 관찰된/추정되는 접두어들
+HANA_PREFIXES = ("HANA", "H1", "H1QOPEN", "HAOPEN", "HANAOP", "HANAAPI",
+                 "HANAWTS", "1QOPEN", "1QAPI")
 
 
-def scan_hkcr():
-    """HKEY_CLASSES_ROOT 최상위에서 후보 ProgID 나열"""
-    print("\n[1] 레지스트리 HKCR ProgID 후보")
-    print("-" * 70)
+def is_hana_candidate(name: str, allow_all: bool = False) -> bool:
+    if allow_all:
+        return "." in name and not name.startswith("{")
+    up = name.upper()
+    return any(up.startswith(p) for p in HANA_PREFIXES) and "." in name
+
+
+def scan_registry(hive_and_path, label: str, allow_all: bool):
+    """레지스트리 하위 키 나열"""
+    hive, path = hive_and_path
     found = []
     try:
-        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "") as root:
+        with winreg.OpenKey(hive, path) as root:
             i = 0
             while True:
                 try:
                     name = winreg.EnumKey(root, i)
                 except OSError:
                     break
-                lname = name.lower()
-                if any(k in lname for k in KEYWORDS) and not any(x in lname for x in EXCLUDE):
-                    if "." in name and not name.startswith("{"):
-                        found.append(name)
+                if is_hana_candidate(name, allow_all) and not name.startswith("{"):
+                    found.append(name)
                 i += 1
+    except FileNotFoundError:
+        pass
     except Exception as e:
-        print(f"레지스트리 조회 오류: {e}")
-
-    for p in sorted(set(found)):
-        print(f"  후보: {p}")
-    if not found:
-        print("  (후보 없음)")
+        print(f"  ({label} 조회 오류: {e})")
     return sorted(set(found))
 
 
 def scan_ocx():
-    """Program Files 아래 관련 OCX 검색"""
-    print("\n[2] 하나증권 관련 OCX/DLL 파일")
-    print("-" * 70)
-    roots = [
-        r"C:\Program Files",
-        r"C:\Program Files (x86)",
-        r"C:\hanaw",
-        r"C:\HanaSecurities",
-        r"C:\1Q",
-    ]
-    patterns = ["*.ocx", "*.dll"]
+    """Program Files 아래 하나증권 관련 OCX/DLL 검색"""
+    roots = [r"C:\Program Files", r"C:\Program Files (x86)",
+             r"C:\hanaw", r"C:\HanaSecurities", r"C:\1Q", r"C:\하나증권"]
     hits = []
     for root in roots:
         if not os.path.exists(root):
             continue
-        for pat in patterns:
+        for pat in ("*.ocx", "*.dll"):
             for path in glob.iglob(os.path.join(root, "**", pat), recursive=True):
                 low = path.lower()
                 if any(k in low for k in ("hana", "1q", "openapi", "h1")):
                     hits.append(path)
-    for h in hits[:30]:
-        print(f"  {h}")
-    if not hits:
-        print("  (검색 결과 없음 — 설치 경로가 표준과 다를 수 있음)")
+                    if len(hits) >= 30:
+                        return hits
     return hits
 
 
-def try_dispatch(progids):
+def dispatch_test(progids):
     """각 후보를 실제로 Dispatch 시도"""
-    print("\n[3] 후보별 Dispatch 테스트")
-    print("-" * 70)
     if not progids:
-        print("  (테스트할 후보 없음)")
-        return None
+        return [], []
     pythoncom.CoInitialize()
-    success = []
+    success, fail = [], []
     for p in progids:
         try:
             obj = win32com.client.Dispatch(p)
-            print(f"  ✓ 성공 : {p}")
             success.append(p)
             del obj
+            print(f"  \u2713 성공 : {p}")
         except Exception as e:
             code = getattr(e, "hresult", "?")
-            print(f"  ✗ 실패 : {p}   ({code})")
-    return success
+            fail.append((p, code))
+            print(f"  \u2717 실패 : {p}   ({code})")
+    return success, fail
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dispatch", action="store_true",
+                    help="후보를 실제 Dispatch 시도 (실제 로드 가능한지 검증)")
+    ap.add_argument("--all", action="store_true",
+                    help="필터 없이 모든 ProgID 나열 (디버그용, 매우 느림)")
+    args = ap.parse_args()
+
+    bits = struct.calcsize("P") * 8
     print("=" * 70)
     print(" 하나증권 1Q OpenAPI ProgID 검색")
+    print(f" Python: {sys.version.split()[0]} ({bits}bit)")
     print("=" * 70)
 
-    candidates = scan_hkcr()
-    scan_ocx()
-    success = try_dispatch(candidates)
+    if bits == 64:
+        print()
+        print(" [주의] 64비트 Python 감지됨.")
+        print(" 한국 증권사 OCX 대부분은 32비트 전용이라 로드가 실패합니다.")
+        print(" (오류: -2147221164 Class not registered)")
+        print(" 32비트 Python 을 별도 설치해 이 도구를 다시 실행하세요.")
+        print()
+
+    print("[1] 레지스트리 스캔")
+    print("-" * 70)
+
+    # 32비트 프로세스에서는 Wow6432Node 가 자동으로 매핑되므로 하나만 봐도 되지만,
+    # 64비트 프로세스에서 실행됐을 경우를 위해 두 곳 모두 확인.
+    targets = [
+        ((winreg.HKEY_CLASSES_ROOT, ""), "HKCR"),
+        ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Classes"), "HKLM\\Classes"),
+        ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Classes\Wow6432Node"),
+         "HKLM\\Classes\\Wow6432Node (32비트)"),
+        ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Classes"),
+         "HKLM\\WOW6432Node\\Classes (32비트)"),
+    ]
+
+    all_candidates = []
+    for tup, label in targets:
+        found = scan_registry(tup, label, args.all)
+        if found:
+            print(f"  [{label}]")
+            for p in found:
+                print(f"     {p}")
+            all_candidates.extend(found)
+        else:
+            print(f"  [{label}] (해당 없음)")
+
+    unique = sorted(set(all_candidates))
+
+    print("\n[2] 하나증권 관련 OCX/DLL 파일")
+    print("-" * 70)
+    ocx = scan_ocx()
+    for h in ocx:
+        print(f"  {h}")
+    if not ocx:
+        print("  (검색 결과 없음)")
+
+    if args.dispatch and unique:
+        print("\n[3] 후보별 Dispatch 테스트")
+        print("-" * 70)
+        success, fail = dispatch_test(unique)
+    else:
+        success = []
+        if unique:
+            print("\n※ --dispatch 옵션 없이는 실제 로드 테스트를 생략합니다.")
+            print("  실제 사용 가능한 ProgID 확인: python tools\\find_progid.py --dispatch")
 
     print("\n" + "=" * 70)
     if success:
         print(" 사용 가능한 ProgID:")
         for p in success:
             print(f"   {p}")
-        print("\n 다음 단계 — config/config.local.yaml 에 아래 줄 추가:")
+        print("\n 다음 단계 — config/config.local.yaml 의 api 블록에 추가:")
         print(f"   api:")
         print(f"     progid: \"{success[0]}\"")
+    elif unique:
+        print(" 하나증권 관련 후보는 발견됐지만, Dispatch 테스트 결과는 아래를 확인:")
+        if bits == 64:
+            print("  → 64비트 Python 문제일 가능성이 큼. 32비트 Python 으로 재시도.")
+        else:
+            print("  → 각 후보 옆의 오류 코드로 원인 파악:")
+            print("     -2147221164 (Class not reg)  : OCX 파일 실제로 없음/미등록")
+            print("     -2147221005 (Invalid class)  : ProgID 자체가 존재하지 않음")
+            print("     -2147024894 (File not found) : DLL 경로 문제")
     else:
-        print(" 자동 감지 실패.")
+        print(" 하나증권 관련 ProgID 를 찾지 못했습니다.")
         print(" 확인 사항:")
-        print("  1) 1QHTS 가 정상 설치·로그인 상태인지")
-        print("  2) 하나증권 1Q OpenAPI 를 별도 신청·설치했는지 (일반 HTS와 다름)")
-        print("  3) 32비트 Python 이 필요할 수 있음 (많은 증권사 OCX 가 32비트 전용)")
-        print("     python -c \"import struct; print(struct.calcsize('P')*8, 'bit')\"")
-        print("  4) 그래도 안 되면 하나증권 API 지원팀에 정확한 ProgID 문의")
+        print("  1) 하나증권 1Q OpenAPI 는 1QHTS 와 별개로 신청·설치 필요")
+        print("     → 하나증권 홈페이지 [해외파생 API] 신청 후 설치 프로그램 다운로드")
+        print("  2) 설치 후 OCX 를 관리자 권한으로 등록:")
+        print("     regsvr32 \"C:\\경로\\HANAAPI.ocx\"  (예시)")
+        print("  3) 하나증권 API 지원팀 문의: 정확한 ProgID 요청")
     print("=" * 70)
 
 
