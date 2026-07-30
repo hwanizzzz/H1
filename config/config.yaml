@@ -8,7 +8,8 @@
 
 api:
   # OpenAPI 설치 루트 (아래에 TranRes/, RealRes/ 폴더가 있어야 함)
-  openapi_root: "C:/1QOpenAPI/1Q OpenAPI"
+  # 실제 설치: C:\1QOpenAPI\1Q OpenAPI\1QApiAgent
+  openapi_root: "C:/1QOpenAPI/1Q OpenAPI/1QApiAgent"
 
   # COM ProgID (기본값 사용 권장. 문제 시 tools/find_progid.py --dispatch)
   progid: "HFCOMMAGENT.HFCommAgentCtrl.1"

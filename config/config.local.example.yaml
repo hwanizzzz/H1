@@ -10,9 +10,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 api:
-  # 하나 Open API 설치 경로 (설치 시 지정한 폴더)
-  # 아래에 TranRes/, RealRes/, system/ 등이 있어야 함
-  openapi_root: "C:/1QOpenAPI/1Q OpenAPI"
+  # 하나 Open API 설치 경로 (아래에 TranRes/, RealRes/, HFCommAgent.dll 이 있어야 함)
+  # 기본 설치 시: C:/1QOpenAPI/1Q OpenAPI/1QApiAgent
+  openapi_root: "C:/1QOpenAPI/1Q OpenAPI/1QApiAgent"
 
   # 하나증권 로그인 아이디
   user_id: "여기에_하나증권_로그인_ID"
