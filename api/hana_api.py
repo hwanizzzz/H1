@@ -561,6 +561,11 @@ class HanaFuturesClient:
         self.api.on_real_data = self._route_real_data
         self._subscribed_ticks: set = set()
 
+        # 관찰성 — 첫 N틱은 INFO 로그, 이후에는 심볼별 카운터
+        self._tick_counter: Dict[str, int] = {}
+        self._VERBOSE_TICKS = 5           # 심볼별 첫 5틱은 INFO 로그
+        self._TICK_SUMMARY_EVERY = 100    # 매 100틱마다 요약
+
     @staticmethod
     def _parse_account(account_no: str):
         parts = account_no.replace(" ", "").split("-")
@@ -743,6 +748,15 @@ class HanaFuturesClient:
         vol = _safe_int(self.api.get_real_output(REAL_TICK, "TRDVOL_1"))
         ts_str = self.api.get_real_output(REAL_TICK, "KTRADE_TIME")
         ts = self._parse_ktime(ts_str) or datetime.now()
+
+        # 관찰성 로그
+        n = self._tick_counter.get(symbol, 0) + 1
+        self._tick_counter[symbol] = n
+        if n <= self._VERBOSE_TICKS:
+            logger.info(f"[tick #{n}] {symbol} price={price} vol={vol} time={ts_str}")
+        elif n % self._TICK_SUMMARY_EVERY == 0:
+            logger.info(f"[tick] {symbol} 누적 {n}틱 최신 price={price}")
+
         if price > 0 and self.on_tick:
             self.on_tick(symbol, price, vol, ts)
 
