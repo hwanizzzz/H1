@@ -1,36 +1,38 @@
 """
-하나증권 1Q Open API - 단일 종목 자동매매 메인 (기본: CME 호주달러 6A)
+단일 종목 자동매매 (기본: 금 MGCQ26) — 하나증권 Open API (1Q Pro)
 
 실행:
-  python main.py
+  C:\\Python311-32\\python.exe main.py
 
-다종목(금+S&P) 동시 운용은 portfolio_main.py 를 사용하세요.
+다종목 동시 운용은 portfolio_main.py 사용.
 
 요구사항:
-  - Windows + 하나증권 1QHTS 로그인 + pip install -r requirements.txt
-  - config/config.yaml 의 symbol: 블록 설정
-
-주의:
-  - 실계좌 전 반드시 is_mock: true 로 충분히 모의투자 검증
-  - 거래 시간: CME (일~금, 1시간 점검 휴장)
+  - Windows + 32bit Python + pywin32
+  - 하나증권 1Q Open API 설치 완료 (regHFCommAgent.bat 등록)
+  - config/config.local.yaml 에 계좌·비밀번호 설정
 """
 
 import sys
 import time
 
-from api.hana_api import HanaAPI
+from api.hana_api import (
+    HanaOpenAPI, HanaFuturesClient,
+    LOGIN_MODE_OVERSEAS_MOCK, LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE,
+)
 from risk.risk_manager import RiskManager, SymbolSpec
 from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
 from utils.logger import setup_logger
-from utils.safety import validate_account_safety, AccountSafetyError, validate_python_bits
+from utils.safety import (
+    validate_account_safety, AccountSafetyError, validate_python_bits,
+)
 from utils.config_loader import load_config
 
 logger = setup_logger("main")
 
 
 class TradingEngine:
-    """단일 종목 자동매매 엔진 (SymbolTrader 래퍼)."""
+    """단일 종목 자동매매 (SymbolTrader 래퍼)."""
 
     def __init__(self, config: dict):
         api_cfg = config["api"]
@@ -38,15 +40,22 @@ class TradingEngine:
         risk_cfg = config["risk"]
         exec_cfg = config["execution"]
 
-        self.api = HanaAPI(
-            account_no=api_cfg["account_no"],
-            account_pw=api_cfg["account_pw"],
-            is_mock=api_cfg["is_mock"],
-            progid=api_cfg.get("progid"),
+        self.api = HanaOpenAPI(progid=api_cfg.get("progid") or None)
+        self.api.on_agent_event = self._on_agent_event
+        self.openapi_root = api_cfg["openapi_root"]
+        self.user_id = api_cfg.get("user_id", "")
+        self.account_no = api_cfg["account_no"]
+        self.account_pw = api_cfg["account_pw"]
+        self.cert_pw = api_cfg.get("cert_pw", "")
+        self.use_cloud_cert = api_cfg.get("use_cloud_cert", True)
+        self.is_mock = api_cfg["is_mock"]
+
+        self.client = HanaFuturesClient(
+            api=self.api, account_no=self.account_no,
+            account_pw=self.account_pw, user_id=self.user_id,
         )
-        self.api.on_login = self._on_login
-        self.api.on_tick = self._on_tick
-        self.api.on_order_filled = self._on_order_filled
+        self.client.on_tick = self._on_tick
+        self.client.on_order_execution = self._on_order_execution
 
         spec = SymbolSpec(sym_cfg["code"], sym_cfg["tick_size"],
                           sym_cfg["tick_value"], sym_cfg.get("name", ""))
@@ -65,41 +74,60 @@ class TradingEngine:
             spec=spec,
             timeframe=sym_cfg.get("timeframe", "1D"),
             strategy=create_strategy(sym_cfg["strategy"]),
-            api=self.api,
+            client=self.client,
             risk=self.risk,
-            order_type=exec_cfg.get("order_type", "MARKET"),
+            order_prc_type=exec_cfg.get("order_type", "MARKET"),
             contract_code=sym_cfg.get("contract_code", ""),
+            quote_code=sym_cfg.get("quote_code", ""),
         )
 
     def start(self):
         logger.info("=" * 60)
         logger.info(" 하나증권 해외선물 자동매매 시작")
-        logger.info(f" 전략: {self.trader.strategy.name} | 종목: {self.trader.spec.code} "
-                    f"({'모의투자' if self.api.is_mock else '실계좌'})")
+        logger.info(f" 전략 {self.trader.strategy.name} | 종목 {self.trader.spec.code} "
+                    f"({'모의투자' if self.is_mock else '실계좌'})")
         logger.info("=" * 60)
-        if not self.api.connect():
-            logger.error("API 연결 실패. 종료.")
+
+        if not self.api.connect(self.openapi_root):
+            logger.error("HanaOpenAPI connect 실패 — 종료")
             sys.exit(1)
+
+        mode = LOGIN_MODE_OVERSEAS_MOCK if self.is_mock else LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE
+        self.api.set_login_mode(mode)
+        ok = (self.api.login_cloud_cert(self.user_id) if self.use_cloud_cert
+              else self.api.login(self.user_id, self.account_pw, self.cert_pw))
+        if not ok:
+            logger.error("로그인 실패 — 종료")
+            self.api.disconnect()
+            sys.exit(2)
+
+        self.client.prepare()
+        self.trader.setup()
+        self.client.subscribe_execution()
+        logger.info("자동매매 가동")
 
     def stop(self):
         self.trader.stop()
+        try:
+            self.api.all_unregister_real()
+        except Exception:
+            pass
+        if self.user_id:
+            try:
+                self.api.logout(self.user_id)
+            except Exception:
+                pass
         self.api.disconnect()
         logger.info("자동매매 종료")
 
-    def _on_login(self, success: bool):
-        if not success:
-            logger.error("로그인 실패")
-            return
-        logger.info("로그인 완료 → 초기화")
-        self.trader.setup()
-        logger.info("자동매매 가동")
+    def _on_tick(self, symbol, price, volume, ts):
+        self.trader.route_tick(symbol, price, volume, ts)
 
-    def _on_tick(self, symbol, price, volume, timestamp):
-        if symbol == self.trader.active_symbol:
-            self.trader.on_tick(price, volume, timestamp)
+    def _on_order_execution(self, data: dict):
+        logger.info(f"[체결통보] {data}")
 
-    def _on_order_filled(self, order_no, symbol, qty, price, side):
-        logger.info(f"체결 확인 | #{order_no} {symbol} {side} {qty}계약 @ {price:.5f}")
+    def _on_agent_event(self, event_type: int, param: int, str_param: str):
+        logger.info(f"AgentEvent type={event_type} strParam={str_param}")
 
 
 def main():
@@ -110,6 +138,7 @@ def main():
     except AccountSafetyError as e:
         logger.error(f"계좌 안전 검증 실패 — 봇 시작 거부\n{e}")
         sys.exit(2)
+
     engine = TradingEngine(config)
     try:
         engine.start()
