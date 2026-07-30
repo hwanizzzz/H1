@@ -14,6 +14,7 @@
   - 거래당 리스크 3% 공격형 설정 — 손실 변동성 큼
 """
 
+import atexit
 import signal
 import sys
 from typing import Dict
@@ -188,18 +189,34 @@ def main():
     app = ensure_qapp()
     engine = PortfolioEngine(config)
 
-    # Ctrl+C 로 Qt 이벤트 루프 탈출
-    def _sigint(*_):
-        logger.info("사용자 종료 요청 (Ctrl+C)")
-        app.quit()
-    signal.signal(signal.SIGINT, _sigint)
+    # 종료 훅 — 창 닫기·SIGTERM·인터프리터 종료 시에도 세션 정리 시도
+    # (하나 API 서버 좀비 세션 방지)
+    _stopped = [False]
+    def _cleanup(reason=""):
+        if _stopped[0]:
+            return
+        _stopped[0] = True
+        if reason:
+            logger.info(f"세션 정리 ({reason})")
+        try:
+            engine.stop()
+        except Exception as e:
+            logger.warning(f"stop 실패: {e}")
+
+    atexit.register(lambda: _cleanup("atexit"))
+    signal.signal(signal.SIGINT,  lambda *_: (_cleanup("SIGINT"),  app.quit()))
+    signal.signal(signal.SIGTERM, lambda *_: (_cleanup("SIGTERM"), app.quit()))
+    try:
+        signal.signal(signal.SIGBREAK, lambda *_: (_cleanup("SIGBREAK"), app.quit()))
+    except AttributeError:
+        pass   # non-Windows
 
     try:
         engine.start()
         logger.info("Ctrl+C 로 종료")
         app.exec_()
     finally:
-        engine.stop()
+        _cleanup("finally")
 
 
 if __name__ == "__main__":

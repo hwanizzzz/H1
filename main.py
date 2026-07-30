@@ -12,6 +12,7 @@
   - config/config.local.yaml 에 계좌·비밀번호 설정
 """
 
+import atexit
 import signal
 import sys
 
@@ -142,17 +143,32 @@ def main():
     app = ensure_qapp()
     engine = TradingEngine(config)
 
-    def _sigint(*_):
-        logger.info("사용자 종료 요청 (Ctrl+C)")
-        app.quit()
-    signal.signal(signal.SIGINT, _sigint)
+    _stopped = [False]
+    def _cleanup(reason=""):
+        if _stopped[0]:
+            return
+        _stopped[0] = True
+        if reason:
+            logger.info(f"세션 정리 ({reason})")
+        try:
+            engine.stop()
+        except Exception as e:
+            logger.warning(f"stop 실패: {e}")
+
+    atexit.register(lambda: _cleanup("atexit"))
+    signal.signal(signal.SIGINT,  lambda *_: (_cleanup("SIGINT"),  app.quit()))
+    signal.signal(signal.SIGTERM, lambda *_: (_cleanup("SIGTERM"), app.quit()))
+    try:
+        signal.signal(signal.SIGBREAK, lambda *_: (_cleanup("SIGBREAK"), app.quit()))
+    except AttributeError:
+        pass
 
     try:
         engine.start()
         logger.info("Ctrl+C 로 종료")
         app.exec_()
     finally:
-        engine.stop()
+        _cleanup("finally")
 
 
 if __name__ == "__main__":

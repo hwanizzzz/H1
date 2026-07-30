@@ -318,7 +318,17 @@ if _QT_AVAILABLE:
         def login_cloud_cert(self, user_id: str) -> bool:
             ret = self._call("CommCloudCert(const QString&)", user_id)
             ok = int(ret or 0) == 1
-            logger.info("클라우드인증서 로그인 " + ("성공" if ok else f"실패: {self._last_err()}"))
+            if ok:
+                logger.info("클라우드인증서 로그인 성공")
+            else:
+                err = self._last_err()
+                logger.info(f"클라우드인증서 로그인 실패: {err}")
+                if "일치" in err or "match" in err.lower():
+                    logger.warning(
+                        "  힌트: '일치하지 않음' 메시지는 실제로 중복 세션(좀비 로그인)일 수 있습니다.\n"
+                        "        1) 1QHTS 에 같은 ID 로 로그인해서 세션 정리\n"
+                        "        2) 그래도 안 되면 5~15분 대기 후 재시도 (서버 자동 세션 만료)"
+                    )
             if self.on_login:
                 self.on_login(ok)
             return ok
