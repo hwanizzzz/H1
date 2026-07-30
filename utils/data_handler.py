@@ -9,11 +9,19 @@
 """
 
 import numpy as np
-import pandas as pd
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Optional, Callable, List
 from utils.logger import setup_logger
+
+# pandas 는 to_dataframe 디버그 헬퍼에만 쓰이므로 선택적 임포트.
+# (32비트 Python 환경에서 pandas 최신판은 wheel 이 없어 컴파일 실패 사례가 있음)
+try:
+    import pandas as pd
+    _HAS_PANDAS = True
+except ImportError:
+    pd = None
+    _HAS_PANDAS = False
 
 logger = setup_logger("data_handler")
 
@@ -153,7 +161,12 @@ class DataHandler:
 
     # ── 조회 헬퍼 ─────────────────────────────────────────────────────────────
 
-    def to_dataframe(self) -> pd.DataFrame:
+    def to_dataframe(self):
+        """디버깅용 pandas DataFrame 변환. pandas 미설치 시 예외 발생."""
+        if not _HAS_PANDAS:
+            raise ImportError(
+                "to_dataframe() 를 사용하려면 pandas 설치 필요: pip install pandas"
+            )
         if not self.bars:
             return pd.DataFrame()
         data = [{

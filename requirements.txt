@@ -1,4 +1,8 @@
 pywin32>=306          # 하나증권 COM API 연동 (Windows 필수)
-pandas>=2.0.0
-numpy>=1.24.0
-pyyaml>=6.0
+numpy>=1.24.0         # 지표 계산 (필수)
+pyyaml>=6.0           # config 파싱 (필수)
+
+# 선택 — 없어도 봇은 정상 동작 (to_dataframe 디버그 헬퍼에만 사용)
+# 32비트 Python 에서는 최신 pandas wheel 이 없어 설치가 실패할 수 있음.
+# 필요하면: pip install "pandas<2.2"
+# pandas>=2.0.0
