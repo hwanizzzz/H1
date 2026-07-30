@@ -164,6 +164,7 @@ if _QT_AVAILABLE:
             self._pending_loops: Dict[int, "QEventLoop"] = {}
             self._tran_results: Dict[int, List[Dict[str, str]]] = {}
             self._tran_errors: Dict[int, str] = {}
+            self._tran_msgs: Dict[int, str] = {}
 
             self._connect_events()
 
@@ -397,9 +398,11 @@ if _QT_AVAILABLE:
 
             rows = self._tran_results.pop(rq_id, None)
             err = self._tran_errors.pop(rq_id, "")
+            err_msg = self._tran_msgs.pop(rq_id, "")
             self._cleanup(rq_id)
             if err and err != "0":
-                logger.warning(f"Tran 오류 ({tr_code}): {err}")
+                logger.warning(f"Tran 오류 ({tr_code}) err={err} msg={err_msg!r} "
+                               f"| last={self._last_err()!r}")
             return rows
 
         def _cleanup(self, rq_id: int):
@@ -472,6 +475,7 @@ if _QT_AVAILABLE:
 
             self._tran_results[rq_id] = rows
             self._tran_errors[rq_id] = error
+            self._tran_msgs[rq_id] = msg
             if msg:
                 logger.debug(f"Tran msg [{tr_code}] {msg}")
 
