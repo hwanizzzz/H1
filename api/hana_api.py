@@ -164,11 +164,27 @@ class HanaOpenAPI:
         """
         COM 컨트롤 생성 → CommInit → 리소스 파일 자동 로드.
 
-        openapi_root: 하나 OpenAPI 설치 루트 (예: "C:\\1QOpenAPI\\1Q OpenAPI")
-                      아래에 TranRes/, RealRes/ 폴더가 있어야 함.
+        openapi_root: 하나 OpenAPI 설치 루트 (예: "C:\\1QOpenAPI\\1Q OpenAPI\\1QApiAgent")
+                      아래에 TranRes/, RealRes/, System/comms.ini 가 있어야 함.
+
+        중요: CommInit 은 상대경로로 System/comms.ini 등을 찾으므로 반드시
+              현재 작업 디렉터리를 openapi_root 로 옮긴 뒤 호출한다.
         """
         if not _COM_AVAILABLE:
             logger.error("COM API 사용 불가 (Windows + pywin32 확인).")
+            return False
+
+        if not os.path.isdir(openapi_root):
+            logger.error(f"openapi_root 경로 없음: {openapi_root}")
+            return False
+
+        # ── 작업 디렉터리를 API 루트로 변경 (comms.ini 등 상대경로 검색) ─────
+        try:
+            self._orig_cwd = os.getcwd()
+            os.chdir(openapi_root)
+            logger.info(f"CWD 변경: {openapi_root}")
+        except Exception as e:
+            logger.error(f"CWD 변경 실패: {e}")
             return False
 
         try:
@@ -179,21 +195,51 @@ class HanaOpenAPI:
             logger.info("COM 컨트롤 생성 성공")
         except Exception as e:
             logger.error(f"COM Dispatch 실패: {e}. ProgID 또는 32비트 Python 확인.")
+            self._restore_cwd()
             return False
 
+        # ── 사전 옵션 ────────────────────────────────────────────────────────
         try:
-            self._api.SetOffAgentMessageBox(1)   # 팝업 방지
-        except Exception:
-            pass
+            self._api.SetOffAgentMessageBox(1)   # 팝업 방지 (CommInit 전 필수)
+            logger.debug("SetOffAgentMessageBox(1) OK")
+        except Exception as e:
+            logger.warning(f"SetOffAgentMessageBox 실패(계속 진행): {e}")
 
-        ret = self._api.CommInit()
+        # 해외 서비스용 초기설정 (v2.62 이상은 0=사용). 문서 4.1.7 ID 55 참조
+        try:
+            self._api.SetOptionalInitBox(0)
+            logger.debug("SetOptionalInitBox(0) OK")
+        except Exception as e:
+            logger.warning(f"SetOptionalInitBox 실패(계속 진행): {e}")
+
+        # ── 통신 초기화 ──────────────────────────────────────────────────────
+        try:
+            ret = self._api.CommInit()
+        except Exception as e:
+            logger.error(f"CommInit 예외: {e}. 확인 사항:\n"
+                         f"  - {openapi_root} 아래 System/comms.ini 존재 여부\n"
+                         f"  - regHFCommAgent.bat 관리자권한 실행 완료 여부\n"
+                         f"  - vcredist_x86.exe 설치 완료 여부\n"
+                         f"  - Python 관리자권한으로 실행 중인지")
+            self._restore_cwd()
+            return False
+
         if ret != 0:
             logger.error(f"CommInit 실패 (ret={ret}): {self._last_err()}")
+            self._restore_cwd()
             return False
         logger.info("CommInit 성공")
 
         self._load_all_resources(openapi_root)
         return True
+
+    def _restore_cwd(self):
+        """CWD 원복 (오류 시)."""
+        if getattr(self, "_orig_cwd", None):
+            try:
+                os.chdir(self._orig_cwd)
+            except Exception:
+                pass
 
     def _load_all_resources(self, openapi_root: str):
         """openapi_root/TranRes, openapi_root/RealRes 아래 *.res 전부 로드."""
