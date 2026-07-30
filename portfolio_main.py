@@ -41,6 +41,7 @@ class PortfolioEngine:
             account_no=api_cfg["account_no"],
             account_pw=api_cfg["account_pw"],
             is_mock=api_cfg["is_mock"],
+            progid=api_cfg.get("progid"),
         )
         self.api.on_login = self._on_login
         self.api.on_tick = self._on_tick

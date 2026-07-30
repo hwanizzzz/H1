@@ -14,6 +14,8 @@ api:
   account_no: "여기에_모의계좌번호"     # 예: "12345678-01"
   account_pw: "여기에_계좌비밀번호"
   is_mock: true                         # 모의는 반드시 true
+  # progid: "여기에_감지된_ProgID"      # python tools/find_progid.py 실행 후 얻은 값
+                                        # 기본값으로 접속 실패 시에만 지정
 
 account_safety:
   mock_accounts:

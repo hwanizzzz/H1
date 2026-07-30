@@ -37,7 +37,8 @@ else:
 
 # ── 상수 ─────────────────────────────────────────────────────────────────────
 
-# 하나증권 1Q Open API COM ProgID (실제 설치 후 레지스트리에서 확인)
+# 하나증권 1Q Open API COM ProgID (설치본에 따라 다름 — config.api.progid 로 지정 가능)
+# 아래 값은 기본 후보. 실제 값은 tools/find_progid.py 로 조회 후 config 에 지정.
 HANA_PROGID = "H1OPENAPI.H1OPENAPICtrl.1"
 
 # 주문 유형
@@ -106,10 +107,12 @@ class HanaAPI:
       on_order_filled(order_no: str, symbol: str, qty: int, price: float, side: str)
     """
 
-    def __init__(self, account_no: str, account_pw: str, is_mock: bool = True):
+    def __init__(self, account_no: str, account_pw: str, is_mock: bool = True,
+                 progid: Optional[str] = None):
         self.account_no = account_no
         self.account_pw = account_pw
         self.is_mock = is_mock
+        self.progid = progid or HANA_PROGID
 
         self._api = None
         self._connected = False
@@ -135,7 +138,8 @@ class HanaAPI:
 
         try:
             pythoncom.CoInitialize()
-            self._api = win32com.client.Dispatch(HANA_PROGID)
+            logger.info(f"COM 클래스 Dispatch 시도: '{self.progid}'")
+            self._api = win32com.client.Dispatch(self.progid)
 
             # 이벤트 핸들러 연결
             self._api = win32com.client.WithEvents(self._api, _HanaEventHandler)

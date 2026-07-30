@@ -3,6 +3,10 @@ api:
   account_no: "YOUR_ACCOUNT_NO"      # 계좌번호 (예: 12345678-01)
   account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비밀번호
   is_mock: true                       # true: 모의투자, false: 실계좌
+  progid: ""                          # COM ProgID. 비우면 기본값 사용.
+                                      # 오류 '잘못된 클래스 문자열' 시 아래 실행:
+                                      #   python tools/find_progid.py
+                                      # 감지된 값을 config.local.yaml 의 api.progid 에 지정
 
 # ── 계좌 안전 검증 (사고 방지 — 매우 중요) ─────────────────────────────────
 # 메인 계좌에서 별도 실거래를 진행 중이실 때 휴먼 에러로 모의/실계좌가
