@@ -46,8 +46,9 @@ class TradingEngine:
         self.openapi_root = api_cfg["openapi_root"]
         self.user_id = api_cfg.get("user_id", "")
         self.account_no = api_cfg["account_no"]
-        self.account_pw = api_cfg["account_pw"]
-        self.cert_pw = api_cfg.get("cert_pw", "")
+        self.account_pw = api_cfg["account_pw"]           # 계좌 비번 (주문·조회용)
+        self.login_pw = api_cfg.get("login_pw", "")       # 홈페이지 로그인 비번
+        self.cert_pw = api_cfg.get("cert_pw", "")         # 공동인증서 비번
         self.use_cloud_cert = api_cfg.get("use_cloud_cert", True)
         self.is_mock = api_cfg["is_mock"]
 
@@ -95,8 +96,9 @@ class TradingEngine:
 
         mode = LOGIN_MODE_OVERSEAS_MOCK if self.is_mock else LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE
         self.api.set_login_mode(mode)
+        # CommLogin(로그인ID, 홈페이지_로그인_비번, 공동인증서_비번)
         ok = (self.api.login_cloud_cert(self.user_id) if self.use_cloud_cert
-              else self.api.login(self.user_id, self.account_pw, self.cert_pw))
+              else self.api.login(self.user_id, self.login_pw, self.cert_pw))
         if not ok:
             logger.error("로그인 실패 — 종료")
             self.api.disconnect()

@@ -15,11 +15,16 @@ api:
   progid: "HFCOMMAGENT.HFCommAgentCtrl.1"
 
   # 로그인 정보 — 실제 값은 config.local.yaml 에 입력
+  # 하나 API 는 세 종류 비밀번호가 다 다릅니다:
+  #   login_pw   : 하나증권 홈페이지 로그인 비밀번호 (CommLogin 2번째 인자)
+  #   account_pw : 계좌 비밀번호 (주문·조회 시 사용, 보통 숫자)
+  #   cert_pw    : 공동인증서 비밀번호 (CommLogin 3번째 인자)
   user_id: "YOUR_USER_ID"
   account_no: "YOUR_ACCOUNT_NO"
-  account_pw: "YOUR_ACCOUNT_PW"
-  cert_pw: ""                        # 공동인증서 비밀번호 (use_cloud_cert=false 일 때만)
-  use_cloud_cert: true               # true: CommCloudCert, false: CommLogin(공동인증)
+  account_pw: "YOUR_ACCOUNT_PW"      # 계좌 비번
+  login_pw: ""                       # 홈페이지 로그인 비번 (use_cloud_cert=false 일 때 필요)
+  cert_pw: ""                        # 공동인증서 비번 (use_cloud_cert=false 일 때 필요)
+  use_cloud_cert: true               # true: CommCloudCert(폰 승인), false: CommLogin(공동인증서 파일)
 
   is_mock: true                      # true: 해외모의(mode=2), false: 실거래(mode=0)
 

@@ -48,8 +48,9 @@ class PortfolioEngine:
         self.openapi_root = api_cfg["openapi_root"]
         self.user_id = api_cfg.get("user_id", "")
         self.account_no = api_cfg["account_no"]
-        self.account_pw = api_cfg["account_pw"]
-        self.cert_pw = api_cfg.get("cert_pw", "")
+        self.account_pw = api_cfg["account_pw"]           # 계좌 비번 (주문·조회용)
+        self.login_pw = api_cfg.get("login_pw", "")       # 홈페이지 로그인 비번 (CommLogin 2번째 인자)
+        self.cert_pw = api_cfg.get("cert_pw", "")         # 공동인증서 비번
         self.use_cloud_cert = api_cfg.get("use_cloud_cert", True)
         self.is_mock = api_cfg["is_mock"]
 
@@ -116,7 +117,9 @@ class PortfolioEngine:
         if self.use_cloud_cert:
             ok = self.api.login_cloud_cert(self.user_id)
         else:
-            ok = self.api.login(self.user_id, self.account_pw, self.cert_pw)
+            # CommLogin(로그인ID, 홈페이지_로그인_비번, 공동인증서_비번)
+            # ※ 홈페이지 로그인 비번이며 계좌 비번이 아님!
+            ok = self.api.login(self.user_id, self.login_pw, self.cert_pw)
 
         if not ok:
             logger.error("로그인 실패 — 종료")

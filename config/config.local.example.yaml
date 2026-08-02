@@ -23,10 +23,19 @@ api:
   # 계좌 비밀번호 (평문 저장. GetEncrpyt 로 자동 암호화되어 API 전송)
   account_pw: "여기에_계좌비밀번호"
 
-  # 로그인 방식
-  use_cloud_cert: true                # true(권장): 클라우드인증서(CommCloudCert)
-                                       # false: 공동인증서(CommLogin) — cert_pw 필요
-  cert_pw: ""                          # use_cloud_cert=false 인 경우만 입력
+  # 로그인 방식 선택
+  use_cloud_cert: false                # true : CommCloudCert (폰 하나원큐 앱 승인 필요)
+                                        # false: CommLogin    (공동인증서 파일, PC 에 설치돼 있어야 함)
+                                        # 대부분의 사용자는 false 가 안정적
+
+  # use_cloud_cert=false 인 경우 아래 두 개 필수:
+  login_pw: "여기에_홈페이지_로그인_비밀번호"    # 하나증권 홈페이지 로그인할 때 쓰는 비번
+  cert_pw:  "여기에_공동인증서_비밀번호"          # 공동인증서 파일 잠금 해제 비번
+
+  # 참고 — 세 비밀번호가 전부 다를 수 있음:
+  #   account_pw : 위 항목, 계좌 비번 (주로 4~8자리 숫자)
+  #   login_pw   : 홈페이지 로그인 비번 (알파+숫자)
+  #   cert_pw    : 인증서 비번 (알파+숫자+특수문자)
 
   is_mock: true                        # 모의는 반드시 true
 
