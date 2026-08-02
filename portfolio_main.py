@@ -190,6 +190,14 @@ def main():
 
     # PyQt5 이벤트 루프 필요 (QAxWidget 호스팅)
     app = ensure_qapp()
+
+    # Qt 이벤트 루프 중에도 파이썬 signal 이 처리되도록 주기적으로 제어권 반환
+    # (Windows + PyQt5 에서 Ctrl+C 가 안 먹히는 문제 해결)
+    from PyQt5.QtCore import QTimer
+    _sig_pump = QTimer()
+    _sig_pump.timeout.connect(lambda: None)
+    _sig_pump.start(200)   # 매 200ms 마다 파이썬 tick
+
     engine = PortfolioEngine(config)
 
     # 종료 훅 — 창 닫기·SIGTERM·인터프리터 종료 시에도 세션 정리 시도

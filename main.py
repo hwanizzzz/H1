@@ -143,6 +143,13 @@ def main():
         sys.exit(2)
 
     app = ensure_qapp()
+
+    # Windows + PyQt5 에서 Ctrl+C 가 이벤트 루프에 막히지 않도록
+    from PyQt5.QtCore import QTimer
+    _sig_pump = QTimer()
+    _sig_pump.timeout.connect(lambda: None)
+    _sig_pump.start(200)
+
     engine = TradingEngine(config)
 
     _stopped = [False]
