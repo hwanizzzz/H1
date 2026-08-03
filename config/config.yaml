@@ -103,6 +103,11 @@ execution:
   order_type: "MARKET"                # MARKET / LIMIT
   slippage_ticks: 1
 
+  # 시세 폴링 주기(초). 하나 모의계좌가 V10 실시간을 제공하지 않는
+  # 경우를 대비해 FID 1000 을 주기적으로 조회해 tick 처럼 처리.
+  # 0 이면 비활성 (V10 실시간만 사용).
+  quote_polling_interval_sec: 30
+
 logging:
   level: "INFO"
   log_dir: "logs"

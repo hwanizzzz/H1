@@ -17,6 +17,7 @@
 import atexit
 import signal
 import sys
+from datetime import datetime
 from typing import Dict
 
 from api.hana_api import (
@@ -73,6 +74,7 @@ class PortfolioEngine:
         )
 
         order_prc_type = exec_cfg.get("order_type", "MARKET")
+        self.poll_interval_sec = int(exec_cfg.get("quote_polling_interval_sec", 30))
 
         # 종목별 트레이더
         self.traders: list[SymbolTrader] = []
@@ -92,6 +94,7 @@ class PortfolioEngine:
 
         self._route: Dict[str, SymbolTrader] = {}
         self._running = False
+        self._quote_timer = None
 
     # ── 시작 / 종료 ───────────────────────────────────────────────────────────
 
@@ -137,11 +140,41 @@ class PortfolioEngine:
         # 5) 주문체결 통보 구독
         self.client.subscribe_execution()
 
+        # 6) FID 시세 폴링 시작 (V10 실시간 미제공 시 대체)
+        self._start_quote_polling()
+
         self._running = True
         logger.info(f"포트폴리오 가동 ({len(self.traders)}종목 구독)")
 
+    def _start_quote_polling(self):
+        """QTimer 로 주기적 FID 시세 조회 → 트레이더 poll_quote 로 라우팅."""
+        if self.poll_interval_sec <= 0:
+            logger.info("FID 시세 폴링 비활성 (quote_polling_interval_sec<=0)")
+            return
+        from PyQt5.QtCore import QTimer
+        self._quote_timer = QTimer()
+        self._quote_timer.timeout.connect(self._poll_all_quotes)
+        self._quote_timer.start(self.poll_interval_sec * 1000)
+        logger.info(f"FID 시세 폴링 시작 (매 {self.poll_interval_sec}초, {len(self.traders)}종목)")
+
+    def _poll_all_quotes(self):
+        """모든 트레이더 종목의 시세를 순차 조회 후 각 트레이더로 전달."""
+        now = datetime.now()
+        for trader in self.traders:
+            try:
+                q = self.client.get_quote(trader.quote_symbol)
+                if q:
+                    trader.poll_quote(q, now)
+            except Exception as e:
+                logger.error(f"폴링 오류 {trader.quote_symbol}: {e}", exc_info=True)
+
     def stop(self):
         self._running = False
+        if self._quote_timer:
+            try:
+                self._quote_timer.stop()
+            except Exception:
+                pass
         for t in self.traders:
             t.stop()
         try:

@@ -15,6 +15,7 @@
 import atexit
 import signal
 import sys
+from datetime import datetime
 
 from api.hana_api import (
     HanaOpenAPI, HanaFuturesClient, ensure_qapp,
@@ -82,6 +83,8 @@ class TradingEngine:
             contract_code=sym_cfg.get("contract_code", ""),
             quote_code=sym_cfg.get("quote_code", ""),
         )
+        self.poll_interval_sec = int(exec_cfg.get("quote_polling_interval_sec", 30))
+        self._quote_timer = None
 
     def start(self):
         logger.info("=" * 60)
@@ -107,9 +110,30 @@ class TradingEngine:
         self.client.prepare()
         self.trader.setup()
         self.client.subscribe_execution()
+
+        if self.poll_interval_sec > 0:
+            from PyQt5.QtCore import QTimer
+            self._quote_timer = QTimer()
+            self._quote_timer.timeout.connect(self._poll_quote)
+            self._quote_timer.start(self.poll_interval_sec * 1000)
+            logger.info(f"FID 시세 폴링 시작 (매 {self.poll_interval_sec}초)")
+
         logger.info("자동매매 가동")
 
+    def _poll_quote(self):
+        try:
+            q = self.client.get_quote(self.trader.quote_symbol)
+            if q:
+                self.trader.poll_quote(q, datetime.now())
+        except Exception as e:
+            logger.error(f"폴링 오류: {e}", exc_info=True)
+
     def stop(self):
+        if self._quote_timer:
+            try:
+                self._quote_timer.stop()
+            except Exception:
+                pass
         self.trader.stop()
         try:
             self.api.all_unregister_real()

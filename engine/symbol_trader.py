@@ -83,6 +83,10 @@ class SymbolTrader:
         self._qty = 0
         self._entry = 0.0
 
+        # FID 폴링(V10 실시간 대체) 상태
+        self._last_cum_volume = 0
+        self._poll_count = 0
+
     # ── 초기화 ────────────────────────────────────────────────────────────────
 
     def setup(self):
@@ -118,10 +122,53 @@ class SymbolTrader:
     # ── 실시간 처리 ───────────────────────────────────────────────────────────
 
     def route_tick(self, quote_symbol: str, price: float, volume: int, ts: datetime):
-        """PortfolioEngine 에서 종목 매칭 후 호출."""
+        """PortfolioEngine 에서 종목 매칭 후 호출 (V10 실시간용)."""
         if quote_symbol != self.quote_symbol:
             return
         self.data.update_tick(price, volume, ts)   # 봉 확정 시 _on_bar_closed
+
+    def poll_quote(self, quote_dict: dict, now: datetime):
+        """
+        PortfolioEngine 주기 폴러가 FID 응답 딕셔너리로 호출.
+        FID 1000 응답을 pseudo-tick 으로 변환해 DataHandler 에 주입.
+
+        FID 매핑: 4=현재가, 8=시간(HHMMSS), 11=누적거래량,
+                 13=시가, 14=고가, 15=저가
+        """
+        try:
+            price = float((quote_dict.get("4") or "0").replace(",", ""))
+            cum_vol_raw = (quote_dict.get("11") or "0").replace(",", "")
+            cum_vol = int(float(cum_vol_raw))
+            time_str = (quote_dict.get("8") or "").strip()
+        except (ValueError, TypeError) as e:
+            logger.warning(f"[{self.quote_symbol}] FID 파싱 실패: {e} | dict={quote_dict}")
+            return
+
+        if price <= 0:
+            return   # 아직 시세 없음(장 전 등)
+
+        tick_vol = max(0, cum_vol - self._last_cum_volume) if self._last_cum_volume else 0
+        self._last_cum_volume = cum_vol
+
+        ts = self._parse_hhmmss(time_str) or now
+
+        self._poll_count += 1
+        if self._poll_count <= 5 or self._poll_count % 100 == 0:
+            logger.info(f"[{self.quote_symbol}] 폴링#{self._poll_count} "
+                        f"price={price} 누적거래량={cum_vol} 틱량={tick_vol} time={time_str}")
+
+        self.data.update_tick(price, tick_vol, ts)
+
+    @staticmethod
+    def _parse_hhmmss(hhmmss: str):
+        if not hhmmss or len(hhmmss) < 6:
+            return None
+        try:
+            now = datetime.now()
+            return now.replace(hour=int(hhmmss[:2]), minute=int(hhmmss[2:4]),
+                               second=int(hhmmss[4:6]), microsecond=0)
+        except (ValueError, TypeError):
+            return None
 
     def _on_bar_closed(self, bar: OHLCVBar):
         try:

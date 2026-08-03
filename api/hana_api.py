@@ -83,6 +83,12 @@ REAL_EXEC      = "EF1"
 REAL_OPEN_POS  = "EF2"
 REAL_UNFILLED  = "EF4"
 
+# FID 조회용 — V10 실시간 대체 폴링
+MARKET_OVERSEAS_FUTURES = "FF"    # 시장분류코드 (FID 9001)
+FID_QUOTE_FIELDS = ["4", "8", "11", "13", "14", "15"]
+# 4=현재가(PRPR), 8=시간(HOUR), 11=누적거래량(ACML_VOL),
+# 13=시가(OPRC), 14=고가(HPRC), 15=저가(LPRC)
+
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
 
@@ -165,6 +171,10 @@ if _QT_AVAILABLE:
             self._tran_results: Dict[int, List[Dict[str, str]]] = {}
             self._tran_errors: Dict[int, str] = {}
             self._tran_msgs: Dict[int, str] = {}
+
+            # 동기 FID 관리 (V10 실시간 대체 폴링용)
+            self._pending_fid_specs: Dict[int, dict] = {}
+            self._fid_results: Dict[int, Dict[str, str]] = {}
 
             self._dump_signals()
             self._connect_events()
@@ -455,11 +465,59 @@ if _QT_AVAILABLE:
 
         def _cleanup(self, rq_id: int):
             self._pending_specs.pop(rq_id, None)
+            self._pending_fid_specs.pop(rq_id, None)
             self._pending_loops.pop(rq_id, None)
             try:
                 self._call("ReleaseRqId(int)", rq_id)
             except Exception:
                 pass
+
+        # ── FID 조회 (관심종목형, 단건) ───────────────────────────────────────
+
+        def request_fid(self, symbol_code: str, symbol_market: str,
+                        fid_list: List[str], screen_no: str = "9998",
+                        timeout: float = 5.0) -> Optional[Dict[str, str]]:
+            """
+            SetPortfolioFidInputData + RequestFid 단건 조회.
+
+            Args:
+                symbol_code    : 종목코드 (예: "MGCZ26")
+                symbol_market  : 시장분류코드 (해외선물="FF", 해외옵션="FO")
+                fid_list       : 조회할 FID 문자열 리스트 (예: ["4","8","11"])
+
+            Returns:
+                {fid: value} 딕셔너리, 실패 시 None
+            """
+            rq_id = int(self._call("CreateRequestID()") or 0)
+            if rq_id <= 0:
+                logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
+                return None
+
+            self._call(
+                "SetPortfolioFidInputData(int,const QString&,const QString&)",
+                rq_id, symbol_code, symbol_market,
+            )
+
+            loop = QEventLoop()
+            self._pending_fid_specs[rq_id] = {"fid_list": fid_list}
+            self._pending_loops[rq_id] = loop
+
+            fid_str = ",".join(fid_list)
+            ret = self._call(
+                "RequestFid(int,const QString&,const QString&)",
+                rq_id, fid_str, screen_no,
+            )
+            if int(ret or 0) <= 0:
+                logger.warning(f"RequestFid 실패 {symbol_code} ret={ret}: {self._last_err()}")
+                self._cleanup(rq_id)
+                return None
+
+            QTimer.singleShot(int(timeout * 1000), loop.quit)
+            loop.exec_()
+
+            result = self._fid_results.pop(rq_id, None)
+            self._cleanup(rq_id)
+            return result
 
         # ── 실시간 ────────────────────────────────────────────────────────────
 
@@ -545,7 +603,24 @@ if _QT_AVAILABLE:
                     logger.error(f"on_real_data 콜백 오류: {e}", exc_info=True)
 
         def _slot_fid_data(self, rq_id, pBlock, nBlockLength):
-            pass  # 필요 시 확장
+            spec = self._pending_fid_specs.get(rq_id)
+            if not spec:
+                return
+            result: Dict[str, str] = {}
+            try:
+                for fid in spec["fid_list"]:
+                    val = self._call(
+                        "GetFidOutputData(int,const QString&,int)",
+                        rq_id, fid, 0,
+                    )
+                    result[fid] = (str(val) if val is not None else "").strip()
+            except Exception as e:
+                logger.error(f"FID 파싱 오류 rq_id={rq_id}: {e}", exc_info=True)
+
+            self._fid_results[rq_id] = result
+            loop = self._pending_loops.get(rq_id)
+            if loop:
+                loop.quit()
 
         def _slot_agent_event(self, event_type, param, str_param):
             logger.info(f"AgentEvent type={event_type} param={param} str={str_param}")
@@ -772,6 +847,19 @@ class HanaFuturesClient:
         return OrderResult(True, order_no=rows[0].get("ODRV_ODNO", ""), msg="취소 접수")
 
     # ── 실시간 ────────────────────────────────────────────────────────────────
+
+    # ── FID 폴링 시세 (V10 실시간 대체) ──────────────────────────────────────
+
+    def get_quote(self, symbol_code: str) -> Optional[Dict[str, str]]:
+        """
+        해외선물 종목의 현재 시세를 FID 1000 으로 조회.
+        모의계좌가 V10 실시간을 제공하지 않을 때 폴링 방식으로 대체 사용.
+        """
+        return self.api.request_fid(
+            symbol_code=symbol_code,
+            symbol_market=MARKET_OVERSEAS_FUTURES,
+            fid_list=FID_QUOTE_FIELDS,
+        )
 
     def subscribe_tick(self, symbol: str) -> bool:
         if symbol in self._subscribed_ticks:
