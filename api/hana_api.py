@@ -27,7 +27,7 @@
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional
 
 from utils.logger import setup_logger
@@ -91,6 +91,11 @@ MARKET_OVERSEAS_FUTURES = "FF"    # 시장분류코드 (FID 9001)
 # 출력: 1173(일자), 1174(시간), 4(종가), 13(시가), 14(고가), 15(저가),
 #       83(체결량), 11(누적거래량)
 FID_TICK_OUTPUT = ["1173", "1174", "4", "13", "14", "15", "83", "11"]
+
+# GID 1008 = 기본일봉(해외파생, FX마진) — RequestFidArray, 복수건
+# 입력: 9001, 9002, 9034(시작일), 9035(종료일)
+# 출력: 9(일자), 4(종가), 13(시가), 14(고가), 15(저가), 11(거래량)
+FID_DAILY_OUTPUT = ["9", "4", "13", "14", "15", "11"]
 
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
@@ -973,51 +978,95 @@ class HanaFuturesClient:
 
     # ── FID 폴링 시세 (V10 실시간 대체) ──────────────────────────────────────
 
-    def get_recent_ticks(self, symbol_code: str, count: int = 5
+    def get_recent_ticks(self, symbol_code: str, count: int = 20,
+                          lookback_days: int = 3
                           ) -> Optional[List[Dict[str, str]]]:
         """
         해외선물 종목의 최근 틱 시세를 GID 1003 로 조회.
         모의계좌가 V10 실시간을 제공하지 않을 때 폴링 방식으로 대체 사용.
 
+        Args:
+            count         : 최근 몇 틱 반환 (최소 5 권장)
+            lookback_days : 시작일을 며칠 전부터로 설정 (CME 세션 날짜 분류
+                            차이 대응 — 오늘 하루만 조회 시 데이터 없는 경우 있음)
+
         Returns:
             [{fid: value}, ...] 최근 tick 리스트 (시간순). 없으면 [], 실패 시 None.
         """
-        today = datetime.now().strftime("%Y%m%d")
+        today = datetime.now()
+        start = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
         return self.api.request_fid_array(
             symbol_code=symbol_code,
             symbol_market=MARKET_OVERSEAS_FUTURES,
             output_fids=FID_TICK_OUTPUT,
             extra_inputs={
-                "9034": today,        # 시작일
-                "9035": today,        # 종료일
-                "9119": str(count),   # 틱건수 (최근 count 개)
+                "9034": start,          # 시작일
+                "9035": end,            # 종료일
+                "9119": str(max(5, count)),   # 틱건수 (최소 5)
             },
-            request_count=count,
+            request_count=max(5, count),
+        )
+
+    def get_daily_bars(self, symbol_code: str, lookback_days: int = 5
+                        ) -> Optional[List[Dict[str, str]]]:
+        """
+        GID 1008 로 최근 며칠 일봉 조회 (틱체결 백업).
+        """
+        today = datetime.now()
+        start = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
+        end = today.strftime("%Y%m%d")
+        return self.api.request_fid_array(
+            symbol_code=symbol_code,
+            symbol_market=MARKET_OVERSEAS_FUTURES,
+            output_fids=FID_DAILY_OUTPUT,
+            extra_inputs={
+                "9034": start,
+                "9035": end,
+            },
+            request_count=lookback_days + 1,
         )
 
     def get_quote(self, symbol_code: str) -> Optional[Dict[str, str]]:
         """
-        최근 tick 리스트에서 가장 최신 tick 만 dict 로 반환 (뒤쪽 호환용).
+        최신 tick 을 dict 로 반환. GID 1003(틱) → 실패 시 GID 1008(일봉) 폴백.
         SymbolTrader 는 이 dict 를 소비.
         """
-        ticks = self.get_recent_ticks(symbol_code, count=1)
+        # 1차 시도: GID 1003 틱체결
+        ticks = self.get_recent_ticks(symbol_code)
         if ticks is None:
             return None
-        if not ticks:
-            return {}
-        # 가장 최신(마지막) tick 반환. FID 매핑을 poll_quote 와 호환되게 변환:
-        #   4=종가 → price, 11=누적거래량, 1174=시간(HHMMSS)
-        t = ticks[-1]
-        return {
-            "4":  t.get("4", ""),         # 종가 = 현재가
-            "8":  t.get("1174", ""),      # 시간 (1174 → 8 로 리네이밍)
-            "11": t.get("11", ""),        # 누적거래량
-            "13": t.get("13", ""),        # 시가
-            "14": t.get("14", ""),        # 고가
-            "15": t.get("15", ""),        # 저가
-            "83": t.get("83", ""),        # 체결량 (tick volume)
-            "1173": t.get("1173", ""),    # 일자
-        }
+        if ticks:
+            t = ticks[-1]   # 가장 최근 tick
+            return {
+                "4":  t.get("4", ""),        # 종가 → 현재가
+                "8":  t.get("1174", ""),     # 시간
+                "11": t.get("11", ""),       # 누적거래량
+                "13": t.get("13", ""),
+                "14": t.get("14", ""),
+                "15": t.get("15", ""),
+                "83": t.get("83", ""),
+                "_source": "GID1003",
+            }
+
+        # 2차 폴백: GID 1008 일봉 (틱이 없으면 오늘 일봉 하나라도)
+        bars = self.get_daily_bars(symbol_code)
+        if bars is None:
+            return None
+        if bars:
+            b = bars[-1]   # 가장 최근 일봉
+            return {
+                "4":  b.get("4", ""),        # 종가 → 현재가
+                "8":  "",                    # 시간 없음
+                "11": b.get("11", ""),       # 거래량
+                "13": b.get("13", ""),
+                "14": b.get("14", ""),
+                "15": b.get("15", ""),
+                "83": "",
+                "1173": b.get("9", ""),      # 일자
+                "_source": "GID1008",
+            }
+        return {}
 
     def subscribe_tick(self, symbol: str) -> bool:
         if symbol in self._subscribed_ticks:
