@@ -483,16 +483,17 @@ if _QT_AVAILABLE:
 
         # ── FID 조회 (관심종목형, 단건) ───────────────────────────────────────
 
-        def request_fid(self, symbol_code: str, symbol_market: str,
+        def request_fid(self, gid: str, symbol_code: str, symbol_market: str,
                         fid_list: List[str], screen_no: str = "9998",
                         timeout: float = 5.0) -> Optional[Dict[str, str]]:
             """
-            SetFidInputData(9001=시장분류, 9002=종목코드) + RequestFid 단건 조회.
+            SetFidInputData(GID, 9001=시장분류, 9002=종목코드) + RequestFid 단건 조회.
 
             Args:
-                symbol_code    : 종목코드 (예: "MGCZ26") — FID 9002 로 전달
-                symbol_market  : 시장분류코드 ("FF"=해외선물) — FID 9001 로 전달
-                fid_list       : 조회할 출력 FID (예: ["4","8","11"])
+                gid            : 응답 데이터 유형 GID (예: "1000")
+                symbol_code    : 종목코드 (FID 9002)
+                symbol_market  : 시장분류코드 (FID 9001)
+                fid_list       : 조회할 출력 FID
 
             Returns:
                 {fid: value} dict, 실패/타임아웃 시 None
@@ -502,11 +503,13 @@ if _QT_AVAILABLE:
                 logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
                 return None
 
-            # 입력 FID 세팅 (관심종목형 대신 표준 SetFidInputData 사용)
+            # ★ 필수 3개 입력 (문서 p.52 예제 기준)
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9002", symbol_code)
             self._call("SetFidInputData(int,const QString&,const QString&)",
                        rq_id, "9001", symbol_market)
             self._call("SetFidInputData(int,const QString&,const QString&)",
-                       rq_id, "9002", symbol_code)
+                       rq_id, "GID", gid)
 
             loop = QEventLoop()
             self._pending_fid_specs[rq_id] = {"fid_list": fid_list, "symbol": symbol_code}
@@ -539,7 +542,7 @@ if _QT_AVAILABLE:
                 logger.warning(f"[FID] 응답 타임아웃 {symbol_code} ({timeout}s) — 서버 미응답")
             return result
 
-        def request_fid_array(self, symbol_code: str, symbol_market: str,
+        def request_fid_array(self, gid: str, symbol_code: str, symbol_market: str,
                               output_fids: List[str],
                               extra_inputs: Optional[Dict[str, str]] = None,
                               screen_no: str = "9998",
@@ -548,27 +551,20 @@ if _QT_AVAILABLE:
                               ) -> Optional[List[Dict[str, str]]]:
             """
             RequestFidArray — 복수건 FID 조회. GID 1003/1008 등 해외파생 시세용.
-
-            Args:
-                symbol_code   : 종목코드 (FID 9002)
-                symbol_market : 시장분류 (FID 9001, 해외선물="FF")
-                output_fids   : 응답으로 받을 FID 리스트
-                extra_inputs  : 추가 입력 FID {"9034":"20260803", "9035":"20260803", ...}
-                request_count : 최대 반환 행 수
-
-            Returns:
-                [{fid: value}, ...] 리스트 (행별). 실패/타임아웃 시 None
+            문서 p.53 예제: GID 를 SetFidInputData(rq, "GID", ...) 로 반드시 명시.
             """
             rq_id = int(self._call("CreateRequestID()") or 0)
             if rq_id <= 0:
                 logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
                 return None
 
-            # 필수 입력
+            # ★ 필수 3개 입력 (문서 p.53 예제 기준)
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9002", symbol_code)
             self._call("SetFidInputData(int,const QString&,const QString&)",
                        rq_id, "9001", symbol_market)
             self._call("SetFidInputData(int,const QString&,const QString&)",
-                       rq_id, "9002", symbol_code)
+                       rq_id, "GID", gid)
             # 추가 입력 (9034 시작일, 9035 종료일, 9119 틱건수 등)
             if extra_inputs:
                 for fid, value in extra_inputs.items():
@@ -997,6 +993,7 @@ class HanaFuturesClient:
         start = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
         end = today.strftime("%Y%m%d")
         return self.api.request_fid_array(
+            gid="1003",                 # ★ 기본당일/틱체결(해외)
             symbol_code=symbol_code,
             symbol_market=MARKET_OVERSEAS_FUTURES,
             output_fids=FID_TICK_OUTPUT,
@@ -1017,6 +1014,7 @@ class HanaFuturesClient:
         start = (today - timedelta(days=lookback_days)).strftime("%Y%m%d")
         end = today.strftime("%Y%m%d")
         return self.api.request_fid_array(
+            gid="1008",                 # ★ 기본일봉(해외파생, FX마진)
             symbol_code=symbol_code,
             symbol_market=MARKET_OVERSEAS_FUTURES,
             output_fids=FID_DAILY_OUTPUT,
