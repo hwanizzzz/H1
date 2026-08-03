@@ -686,18 +686,37 @@ if _QT_AVAILABLE:
                 return
             is_array = spec.get("is_array", False)
             fid_list = spec["fid_list"]
+            symbol = spec.get("symbol", "?")
+
+            # 서버 응답 옵션값 (에러/메시지) — 원인 진단용
+            err = self._get_opt(OPT_ERROR)
+            msg = self._get_opt(OPT_MSG)
 
             try:
                 row_cnt = int(self._call(
                     "GetFidOutputRowCnt(int)", rq_id,
                 ) or 0)
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[FID] GetFidOutputRowCnt 예외 {symbol}: {e}")
                 row_cnt = 0
+
+            # 진단 로그 — 첫 몇 회는 항상 상세 출력
+            fid_diag = getattr(self, "_fid_diag_count", 0) + 1
+            self._fid_diag_count = fid_diag
+            if fid_diag <= 6:
+                logger.info(f"[FID resp #{fid_diag}] {symbol} rows={row_cnt} err={err!r} msg={msg!r}")
 
             if is_array:
                 rows: List[Dict[str, str]] = []
+                if row_cnt <= 0:
+                    # 데이터가 진짜로 0행이면 빈 리스트 반환 (더미 1행 생성 안 함)
+                    self._fid_array_results[rq_id] = rows
+                    loop = self._pending_loops.get(rq_id)
+                    if loop:
+                        loop.quit()
+                    return
                 try:
-                    for i in range(max(1, row_cnt)):
+                    for i in range(row_cnt):
                         row = {}
                         for fid in fid_list:
                             val = self._call(
