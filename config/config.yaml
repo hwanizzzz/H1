@@ -108,6 +108,14 @@ execution:
   # 0 이면 비활성 (V10 실시간만 사용).
   quote_polling_interval_sec: 30
 
+  # 시세 소스:
+  #   "hana"     : 하나 API FID 만 (실계좌에서만 실제 값 옴)
+  #   "external" : Yahoo Finance 만 (모의계좌 대안, 지연 시세)
+  #   "auto"     : 하나 우선 시도 → 빈 응답 시 Yahoo 폴백 (권장)
+  # 모의계좌라면 auto/external 사용. 실계좌 전환 후엔 auto 로 두면
+  # 자동으로 하나 시세를 쓰게 됨.
+  quote_source: "auto"
+
 logging:
   level: "INFO"
   log_dir: "logs"

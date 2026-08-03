@@ -24,6 +24,7 @@ from api.hana_api import (
     HanaOpenAPI, HanaFuturesClient, ensure_qapp,
     LOGIN_MODE_OVERSEAS_MOCK, LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE,
 )
+from api.external_quote import YahooQuoteClient
 from risk.risk_manager import RiskManager, SymbolSpec
 from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
@@ -75,6 +76,13 @@ class PortfolioEngine:
 
         order_prc_type = exec_cfg.get("order_type", "MARKET")
         self.poll_interval_sec = int(exec_cfg.get("quote_polling_interval_sec", 30))
+
+        # 외부 시세 소스 (모의 서버 시세 미제공 대응)
+        # "hana" : 하나 FID 만 (실계좌에서만 유효)
+        # "external" : Yahoo Finance 만 (모의계좌 대안)
+        # "auto" : 하나 FID 우선 시도, 빈값이면 Yahoo 폴백 (권장)
+        self.quote_source = exec_cfg.get("quote_source", "auto").lower()
+        self._ext_quote = YahooQuoteClient()
 
         # 종목별 트레이더
         self.traders: list[SymbolTrader] = []
@@ -164,22 +172,42 @@ class PortfolioEngine:
         debug = self._poll_tick_count <= 3
 
         if debug:
-            logger.info(f"[폴링#{self._poll_tick_count}] 시세 조회 시작 ({len(self.traders)}종목)")
+            logger.info(f"[폴링#{self._poll_tick_count}] 시세 조회 시작 "
+                        f"({len(self.traders)}종목, source={self.quote_source})")
 
         for trader in self.traders:
             try:
-                q = self.client.get_quote(trader.quote_symbol)
-                if debug:
-                    logger.info(f"[폴링#{self._poll_tick_count}] "
-                                f"{trader.quote_symbol} 응답={type(q).__name__} "
-                                f"{repr(q)[:200]}")
+                q = self._fetch_quote(trader.quote_symbol, debug)
                 if q:
                     trader.poll_quote(q, now)
                 elif debug:
                     logger.warning(f"[폴링#{self._poll_tick_count}] "
-                                   f"{trader.quote_symbol} 응답이 falsy — poll_quote 스킵")
+                                   f"{trader.quote_symbol} 유효한 시세 없음")
             except Exception as e:
                 logger.error(f"폴링 오류 {trader.quote_symbol}: {e}", exc_info=True)
+
+    def _fetch_quote(self, quote_symbol: str, debug: bool):
+        """quote_source 정책에 따라 시세 조회. 유효한 값이 있는 dict 만 반환."""
+        # 1) 하나 API 우선 시도 (hana / auto)
+        if self.quote_source in ("hana", "auto"):
+            q = self.client.get_quote(quote_symbol)
+            if q and (q.get("4") or "").strip():
+                if debug:
+                    logger.info(f"[폴링] {quote_symbol} 하나 응답 OK src={q.get('_source')}")
+                return q
+            if self.quote_source == "hana":
+                if debug:
+                    logger.warning(f"[폴링] {quote_symbol} 하나 응답 empty (hana 모드에선 폴백 안 함)")
+                return None
+            # auto 모드에서 하나가 실패 → 외부로 폴백
+            if debug:
+                logger.info(f"[폴링] {quote_symbol} 하나 응답 empty → 외부 폴백")
+
+        # 2) 외부(Yahoo) 시도
+        q = self._ext_quote.get_quote_dict(quote_symbol)
+        if debug and q:
+            logger.info(f"[폴링] {quote_symbol} 외부 응답 OK src={q.get('_source')} price={q.get('4')}")
+        return q
 
     def stop(self):
         self._running = False
