@@ -707,10 +707,12 @@ if _QT_AVAILABLE:
             if fid_diag <= 6:
                 logger.info(f"[FID resp #{fid_diag}] {symbol} rows={row_cnt} err={err!r} msg={msg!r}")
 
+            # 첫 몇 회는 raw 값을 그대로 노출 (type + repr)
+            probe_diag = fid_diag <= 3
+
             if is_array:
                 rows: List[Dict[str, str]] = []
                 if row_cnt <= 0:
-                    # 데이터가 진짜로 0행이면 빈 리스트 반환 (더미 1행 생성 안 함)
                     self._fid_array_results[rq_id] = rows
                     loop = self._pending_loops.get(rq_id)
                     if loop:
@@ -724,6 +726,8 @@ if _QT_AVAILABLE:
                                 "GetFidOutputData(int,const QString&,int)",
                                 rq_id, fid, i,
                             )
+                            if probe_diag:
+                                logger.info(f"  FID {fid} row{i}: type={type(val).__name__} raw={val!r}")
                             row[fid] = (str(val) if val is not None else "").strip()
                         rows.append(row)
                 except Exception as e:
@@ -737,10 +741,27 @@ if _QT_AVAILABLE:
                             "GetFidOutputData(int,const QString&,int)",
                             rq_id, fid, 0,
                         )
+                        if probe_diag:
+                            logger.info(f"  FID {fid}: type={type(val).__name__} raw={val!r}")
                         result[fid] = (str(val) if val is not None else "").strip()
                 except Exception as e:
                     logger.error(f"FID 파싱 오류 rq_id={rq_id}: {e}", exc_info=True)
                 self._fid_results[rq_id] = result
+
+                # rows=1 인데 값 다 비어있으면 FID 번호를 폭넓게 프로브
+                if probe_diag and row_cnt > 0 and all(not v for v in result.values()):
+                    logger.warning(f"[FID probe] {symbol} rows>0 이지만 요청 FID 다 빔 — 후보 스캔")
+                    for probe_fid in ["1", "2", "3", "10", "12", "16", "20",
+                                       "100", "1173", "1174",
+                                       "TRDPRC_1", "PRPR", "CURRENT_PRICE"]:
+                        try:
+                            v = self._call("GetFidOutputData(int,const QString&,int)",
+                                           rq_id, probe_fid, 0)
+                            s = (str(v) if v is not None else "").strip()
+                            if s:
+                                logger.info(f"  ★ 값 있는 FID: {probe_fid} = {s!r}")
+                        except Exception:
+                            pass
 
             loop = self._pending_loops.get(rq_id)
             if loop:
