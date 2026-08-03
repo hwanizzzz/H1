@@ -478,28 +478,29 @@ if _QT_AVAILABLE:
                         fid_list: List[str], screen_no: str = "9998",
                         timeout: float = 5.0) -> Optional[Dict[str, str]]:
             """
-            SetPortfolioFidInputData + RequestFid 단건 조회.
+            SetFidInputData(9001=시장분류, 9002=종목코드) + RequestFid 단건 조회.
 
             Args:
-                symbol_code    : 종목코드 (예: "MGCZ26")
-                symbol_market  : 시장분류코드 (해외선물="FF", 해외옵션="FO")
-                fid_list       : 조회할 FID 문자열 리스트 (예: ["4","8","11"])
+                symbol_code    : 종목코드 (예: "MGCZ26") — FID 9002 로 전달
+                symbol_market  : 시장분류코드 ("FF"=해외선물) — FID 9001 로 전달
+                fid_list       : 조회할 출력 FID (예: ["4","8","11"])
 
             Returns:
-                {fid: value} 딕셔너리, 실패 시 None
+                {fid: value} dict, 실패/타임아웃 시 None
             """
             rq_id = int(self._call("CreateRequestID()") or 0)
             if rq_id <= 0:
                 logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
                 return None
 
-            self._call(
-                "SetPortfolioFidInputData(int,const QString&,const QString&)",
-                rq_id, symbol_code, symbol_market,
-            )
+            # 입력 FID 세팅 (관심종목형 대신 표준 SetFidInputData 사용)
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9001", symbol_market)
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9002", symbol_code)
 
             loop = QEventLoop()
-            self._pending_fid_specs[rq_id] = {"fid_list": fid_list}
+            self._pending_fid_specs[rq_id] = {"fid_list": fid_list, "symbol": symbol_code}
             self._pending_loops[rq_id] = loop
 
             fid_str = ",".join(fid_list)
@@ -507,16 +508,26 @@ if _QT_AVAILABLE:
                 "RequestFid(int,const QString&,const QString&)",
                 rq_id, fid_str, screen_no,
             )
-            if int(ret or 0) <= 0:
-                logger.warning(f"RequestFid 실패 {symbol_code} ret={ret}: {self._last_err()}")
+            ret_i = int(ret or 0)
+            if ret_i <= 0:
+                logger.warning(f"[FID] RequestFid 반환값 실패 {symbol_code} ret={ret_i} err={self._last_err()!r}")
                 self._cleanup(rq_id)
                 return None
 
-            QTimer.singleShot(int(timeout * 1000), loop.quit)
+            # 타임아웃 후에도 응답 없음 감지 위해 flag
+            timed_out = {"v": True}
+            def _on_timeout():
+                timed_out["v"] = True
+                loop.quit()
+            QTimer.singleShot(int(timeout * 1000), _on_timeout)
+            # 응답 오면 _slot_fid_data 에서 loop.quit() → timed_out 은 False 로 남지 않음
+            # 대신 결과 dict 존재 여부로 판단
             loop.exec_()
 
             result = self._fid_results.pop(rq_id, None)
             self._cleanup(rq_id)
+            if result is None:
+                logger.warning(f"[FID] 응답 타임아웃 {symbol_code} ({timeout}s) — 서버 미응답")
             return result
 
         # ── 실시간 ────────────────────────────────────────────────────────────
