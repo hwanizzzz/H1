@@ -1004,13 +1004,14 @@ class HanaFuturesClient:
           SetFidInputData("GID",  "1000")
         추가 파라미터 없음(9034/9035/9119 는 차트용). RequestFid 로 단건 조회.
         """
-        # 요청 FID: 4=현재가, 5=전일대비, 7=대비율, 8=시간, 11=누적거래량,
-        #           13=시가, 14=고가, 15=저가
+        # 샘플 ForeignFutSiseDlg 와 완전 동일한 FID 리스트:
+        # 4=현재가, 6=전일대비부호, 5=전일대비, 7=대비율, 11=누적거래량,
+        # 28=전일거래량, 13=시가, 14=고가, 15=저가
         result = self.api.request_fid(
             gid="1000",
             symbol_code=symbol_code,
             symbol_market=MARKET_OVERSEAS_FUTURES,
-            fid_list=["4", "5", "7", "8", "11", "13", "14", "15"],
+            fid_list=["4", "6", "5", "7", "11", "28", "13", "14", "15"],
         )
         if result is None:
             return None
