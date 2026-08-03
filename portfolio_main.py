@@ -161,18 +161,23 @@ class PortfolioEngine:
         """모든 트레이더 종목의 시세를 순차 조회 후 각 트레이더로 전달."""
         self._poll_tick_count = getattr(self, "_poll_tick_count", 0) + 1
         now = datetime.now()
+        debug = self._poll_tick_count <= 3
 
-        # 첫 몇 회는 항상 로그 — 타이머가 실제 동작하는지 확인용
-        if self._poll_tick_count <= 3:
+        if debug:
             logger.info(f"[폴링#{self._poll_tick_count}] 시세 조회 시작 ({len(self.traders)}종목)")
 
         for trader in self.traders:
             try:
                 q = self.client.get_quote(trader.quote_symbol)
+                if debug:
+                    logger.info(f"[폴링#{self._poll_tick_count}] "
+                                f"{trader.quote_symbol} 응답={type(q).__name__} "
+                                f"{repr(q)[:200]}")
                 if q:
                     trader.poll_quote(q, now)
-                elif self._poll_tick_count <= 3:
-                    logger.warning(f"[폴링#{self._poll_tick_count}] {trader.quote_symbol} 응답 없음(None)")
+                elif debug:
+                    logger.warning(f"[폴링#{self._poll_tick_count}] "
+                                   f"{trader.quote_symbol} 응답이 falsy — poll_quote 스킵")
             except Exception as e:
                 logger.error(f"폴링 오류 {trader.quote_symbol}: {e}", exc_info=True)
 

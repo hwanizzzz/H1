@@ -135,25 +135,31 @@ class SymbolTrader:
         FID 매핑: 4=현재가, 8=시간(HHMMSS), 11=누적거래량,
                  13=시가, 14=고가, 15=저가
         """
+        self._poll_count += 1
+        debug_this = self._poll_count <= 5   # 첫 5회는 항상 상세 로그
+
         try:
             price = float((quote_dict.get("4") or "0").replace(",", ""))
             cum_vol_raw = (quote_dict.get("11") or "0").replace(",", "")
             cum_vol = int(float(cum_vol_raw))
             time_str = (quote_dict.get("8") or "").strip()
         except (ValueError, TypeError) as e:
-            logger.warning(f"[{self.quote_symbol}] FID 파싱 실패: {e} | dict={quote_dict}")
+            logger.warning(f"[{self.quote_symbol}] 폴링#{self._poll_count} "
+                           f"파싱 실패: {e} | dict={quote_dict}")
             return
 
         if price <= 0:
-            return   # 아직 시세 없음(장 전 등)
+            # 응답은 왔지만 시세가 0. 원인 파악 위해 첫 몇 회는 dict 통째로 로그.
+            if debug_this:
+                logger.warning(f"[{self.quote_symbol}] 폴링#{self._poll_count} "
+                               f"price=0 (응답 왔으나 시세 없음). dict={quote_dict}")
+            return
 
         tick_vol = max(0, cum_vol - self._last_cum_volume) if self._last_cum_volume else 0
         self._last_cum_volume = cum_vol
-
         ts = self._parse_hhmmss(time_str) or now
 
-        self._poll_count += 1
-        if self._poll_count <= 5 or self._poll_count % 100 == 0:
+        if debug_this or self._poll_count % 100 == 0:
             logger.info(f"[{self.quote_symbol}] 폴링#{self._poll_count} "
                         f"price={price} 누적거래량={cum_vol} 틱량={tick_vol} time={time_str}")
 
