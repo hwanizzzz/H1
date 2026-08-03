@@ -166,46 +166,84 @@ if _QT_AVAILABLE:
             self._tran_errors: Dict[int, str] = {}
             self._tran_msgs: Dict[int, str] = {}
 
+            self._dump_signals()
             self._connect_events()
+
+        # ── OCX 시그널 진단 ───────────────────────────────────────────────────
+
+        def _dump_signals(self):
+            """QAxWidget 에 노출된 시그널을 전부 로그 (진단용)."""
+            try:
+                mo = self.metaObject()
+                sigs = []
+                for i in range(mo.methodCount()):
+                    m = mo.method(i)
+                    # 4 = Signal
+                    if m.methodType() == 4:
+                        sig = bytes(m.methodSignature()).decode(errors="replace")
+                        if sig.startswith("On") or sig.startswith("on"):
+                            sigs.append(sig)
+                if sigs:
+                    logger.info(f"OCX 노출 시그널 ({len(sigs)}개): {', '.join(sigs)}")
+                else:
+                    logger.warning("OCX 에서 On* 시그널을 하나도 찾지 못함")
+            except Exception as e:
+                logger.warning(f"시그널 열거 실패: {e}")
 
         # ── OCX 이벤트를 Qt 슬롯으로 연결 ────────────────────────────────────
 
         def _connect_events(self):
-            """COM 이벤트가 QAxWidget 에 시그널로 노출됨."""
-            handlers = [
-                ("OnGetTranData(int,QString,int)", self._slot_tran_data),
-                ("OnGetRealData(QString,QString,QString,int)", self._slot_real_data),
-                ("OnGetFidData(int,QString,int)", self._slot_fid_data),
-                ("OnAgentEventHandler(int,int,QString)", self._slot_agent_event),
+            """COM 이벤트를 슬롯으로 연결. 시그니처 여러 개 시도."""
+            events = [
+                ("OnGetTranData", self._slot_tran_data,
+                 ["OnGetTranData(int,QString,int)"]),
+                ("OnGetRealData", self._slot_real_data,
+                 ["OnGetRealData(QString,QString,QString,int)",
+                  "OnGetRealData(const QString&,const QString&,const QString&,int)",
+                  "OnGetRealData(QString,QString,int,int)"]),
+                ("OnGetFidData", self._slot_fid_data,
+                 ["OnGetFidData(int,QString,int)"]),
+                ("OnAgentEventHandler", self._slot_agent_event,
+                 ["OnAgentEventHandler(int,int,QString)",
+                  "OnAgentEventHandler(int,int,const QString&)"]),
             ]
-            for sig, slot in handlers:
-                try:
-                    ok = self.connectSlot(sig, slot) if hasattr(self, "connectSlot") \
-                         else self._connect_by_name(sig, slot)
-                    if not ok:
-                        logger.warning(f"이벤트 연결 실패(무시): {sig}")
-                except Exception as e:
-                    logger.warning(f"이벤트 연결 예외 {sig}: {e}")
+            for name, slot, sigs in events:
+                connected = False
 
-        def _connect_by_name(self, sig: str, slot) -> bool:
-            """QAxWidget 이벤트를 시그니처 문자열로 연결."""
-            name = sig.split("(")[0]
-            try:
-                getattr(self, name).connect(slot)
-                return True
-            except Exception:
-                pass
-            # 폴백 — QMetaObject 이용
-            try:
-                from PyQt5.QtCore import QMetaObject
-                idx = self.metaObject().indexOfSignal(sig)
-                if idx < 0:
-                    return False
-                self.connect(self, self.metaObject().method(idx),
-                             slot, type=0)
-                return True
-            except Exception:
-                return False
+                # 1) 속성으로 직접 접근 (QAxWidget 자동 시그니처)
+                try:
+                    sig_attr = getattr(self, name, None)
+                    if sig_attr is not None and hasattr(sig_attr, "connect"):
+                        sig_attr.connect(slot)
+                        logger.info(f"이벤트 연결(속성): {name}")
+                        connected = True
+                except Exception as e:
+                    logger.debug(f"속성 연결 실패 {name}: {e}")
+
+                # 2) metaObject 로 시그니처 명시 연결 시도
+                if not connected:
+                    for sig in sigs:
+                        try:
+                            idx = self.metaObject().indexOfSignal(
+                                self._normalized_signature(sig)
+                            )
+                            if idx >= 0:
+                                method = self.metaObject().method(idx)
+                                self.connect(self, method, slot, 0)
+                                logger.info(f"이벤트 연결(meta): {sig}")
+                                connected = True
+                                break
+                        except Exception as e:
+                            logger.debug(f"meta 연결 실패 {sig}: {e}")
+
+                if not connected:
+                    logger.warning(f"이벤트 {name} 연결 실패 — 이 이벤트는 수신 안 됨")
+
+        @staticmethod
+        def _normalized_signature(sig: str) -> bytes:
+            """indexOfSignal 은 정규화된 시그니처를 요구 (공백 제거 등)."""
+            from PyQt5.QtCore import QMetaObject
+            return QMetaObject.normalizedSignature(sig)
 
         # ── OCX 메소드 호출 헬퍼 ──────────────────────────────────────────────
 
@@ -493,7 +531,13 @@ if _QT_AVAILABLE:
             if loop:
                 loop.quit()
 
-        def _slot_real_data(self, real_name, real_key, pBlock, nBlockLength):
+        def _slot_real_data(self, real_name, real_key, pBlock=None, nBlockLength=None):
+            # 무조건 최초 몇 건은 로그 (실시간 이벤트가 도달하는지 확인용)
+            self._real_event_count = getattr(self, "_real_event_count", 0) + 1
+            if self._real_event_count <= 20:
+                logger.info(f"[OnGetRealData#{self._real_event_count}] "
+                            f"name={real_name!r} key={real_key!r}")
+
             if self.on_real_data:
                 try:
                     self.on_real_data(str(real_name), str(real_key))

@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 setlocal
 title Hana 자동매매 봇 (다종목 포트폴리오 - 모의투자)
 
