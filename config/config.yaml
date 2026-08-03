@@ -58,7 +58,8 @@ symbols:
   - code: "MGC"                       # E-micro Gold (10oz)
     name: "E-micro Gold"
     exchange: "COMEX"
-    contract_code: "Q26"              # 8월물 (1QHTS: MGCQ26)
+    contract_code: "Z26"              # 12월물 (모의계좌 활성 월물: MGCZ26)
+                                      # ※ 실계좌는 근월물(Q26) 이지만 모의는 원월물
     quote_code: ""
     tick_size: 0.10
     tick_value: 1.0
