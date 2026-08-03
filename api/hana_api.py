@@ -85,9 +85,12 @@ REAL_UNFILLED  = "EF4"
 
 # FID 조회용 — V10 실시간 대체 폴링
 MARKET_OVERSEAS_FUTURES = "FF"    # 시장분류코드 (FID 9001)
-FID_QUOTE_FIELDS = ["4", "8", "11", "13", "14", "15"]
-# 4=현재가(PRPR), 8=시간(HOUR), 11=누적거래량(ACML_VOL),
-# 13=시가(OPRC), 14=고가(HPRC), 15=저가(LPRC)
+
+# GID 1003 = 기본당일/틱체결(해외) — RequestFidArray, 복수건
+# 입력: 9001(시장), 9002(종목), 9034(시작일), 9035(종료일), 9119(틱건수 옵션)
+# 출력: 1173(일자), 1174(시간), 4(종가), 13(시가), 14(고가), 15(저가),
+#       83(체결량), 11(누적거래량)
+FID_TICK_OUTPUT = ["1173", "1174", "4", "13", "14", "15", "83", "11"]
 
 
 # ── 데이터 클래스 ─────────────────────────────────────────────────────────────
@@ -174,7 +177,8 @@ if _QT_AVAILABLE:
 
             # 동기 FID 관리 (V10 실시간 대체 폴링용)
             self._pending_fid_specs: Dict[int, dict] = {}
-            self._fid_results: Dict[int, Dict[str, str]] = {}
+            self._fid_results: Dict[int, Dict[str, str]] = {}          # 단건
+            self._fid_array_results: Dict[int, List[Dict[str, str]]] = {}  # 복수건
 
             self._dump_signals()
             self._connect_events()
@@ -530,6 +534,69 @@ if _QT_AVAILABLE:
                 logger.warning(f"[FID] 응답 타임아웃 {symbol_code} ({timeout}s) — 서버 미응답")
             return result
 
+        def request_fid_array(self, symbol_code: str, symbol_market: str,
+                              output_fids: List[str],
+                              extra_inputs: Optional[Dict[str, str]] = None,
+                              screen_no: str = "9998",
+                              request_count: int = 20,
+                              timeout: float = 10.0
+                              ) -> Optional[List[Dict[str, str]]]:
+            """
+            RequestFidArray — 복수건 FID 조회. GID 1003/1008 등 해외파생 시세용.
+
+            Args:
+                symbol_code   : 종목코드 (FID 9002)
+                symbol_market : 시장분류 (FID 9001, 해외선물="FF")
+                output_fids   : 응답으로 받을 FID 리스트
+                extra_inputs  : 추가 입력 FID {"9034":"20260803", "9035":"20260803", ...}
+                request_count : 최대 반환 행 수
+
+            Returns:
+                [{fid: value}, ...] 리스트 (행별). 실패/타임아웃 시 None
+            """
+            rq_id = int(self._call("CreateRequestID()") or 0)
+            if rq_id <= 0:
+                logger.error(f"CreateRequestID 실패 rq_id={rq_id}")
+                return None
+
+            # 필수 입력
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9001", symbol_market)
+            self._call("SetFidInputData(int,const QString&,const QString&)",
+                       rq_id, "9002", symbol_code)
+            # 추가 입력 (9034 시작일, 9035 종료일, 9119 틱건수 등)
+            if extra_inputs:
+                for fid, value in extra_inputs.items():
+                    self._call("SetFidInputData(int,const QString&,const QString&)",
+                               rq_id, str(fid), str(value))
+
+            loop = QEventLoop()
+            self._pending_fid_specs[rq_id] = {
+                "fid_list": output_fids, "symbol": symbol_code, "is_array": True,
+            }
+            self._pending_loops[rq_id] = loop
+
+            fid_str = ",".join(output_fids)
+            ret = self._call(
+                "RequestFidArray(int,const QString&,const QString&,const QString&,"
+                "const QString&,int)",
+                rq_id, fid_str, "0", "", screen_no, request_count,
+            )
+            ret_i = int(ret or 0)
+            if ret_i <= 0:
+                logger.warning(f"[FID] RequestFidArray 실패 {symbol_code} ret={ret_i} err={self._last_err()!r}")
+                self._cleanup(rq_id)
+                return None
+
+            QTimer.singleShot(int(timeout * 1000), loop.quit)
+            loop.exec_()
+
+            result = self._fid_array_results.pop(rq_id, None)
+            self._cleanup(rq_id)
+            if result is None:
+                logger.warning(f"[FID Array] 응답 타임아웃 {symbol_code} ({timeout}s)")
+            return result
+
         # ── 실시간 ────────────────────────────────────────────────────────────
 
         def register_real(self, real_name: str, real_key: str) -> bool:
@@ -617,18 +684,44 @@ if _QT_AVAILABLE:
             spec = self._pending_fid_specs.get(rq_id)
             if not spec:
                 return
-            result: Dict[str, str] = {}
-            try:
-                for fid in spec["fid_list"]:
-                    val = self._call(
-                        "GetFidOutputData(int,const QString&,int)",
-                        rq_id, fid, 0,
-                    )
-                    result[fid] = (str(val) if val is not None else "").strip()
-            except Exception as e:
-                logger.error(f"FID 파싱 오류 rq_id={rq_id}: {e}", exc_info=True)
+            is_array = spec.get("is_array", False)
+            fid_list = spec["fid_list"]
 
-            self._fid_results[rq_id] = result
+            try:
+                row_cnt = int(self._call(
+                    "GetFidOutputRowCnt(int)", rq_id,
+                ) or 0)
+            except Exception:
+                row_cnt = 0
+
+            if is_array:
+                rows: List[Dict[str, str]] = []
+                try:
+                    for i in range(max(1, row_cnt)):
+                        row = {}
+                        for fid in fid_list:
+                            val = self._call(
+                                "GetFidOutputData(int,const QString&,int)",
+                                rq_id, fid, i,
+                            )
+                            row[fid] = (str(val) if val is not None else "").strip()
+                        rows.append(row)
+                except Exception as e:
+                    logger.error(f"FID array 파싱 오류 rq_id={rq_id}: {e}", exc_info=True)
+                self._fid_array_results[rq_id] = rows
+            else:
+                result: Dict[str, str] = {}
+                try:
+                    for fid in fid_list:
+                        val = self._call(
+                            "GetFidOutputData(int,const QString&,int)",
+                            rq_id, fid, 0,
+                        )
+                        result[fid] = (str(val) if val is not None else "").strip()
+                except Exception as e:
+                    logger.error(f"FID 파싱 오류 rq_id={rq_id}: {e}", exc_info=True)
+                self._fid_results[rq_id] = result
+
             loop = self._pending_loops.get(rq_id)
             if loop:
                 loop.quit()
@@ -861,16 +954,51 @@ class HanaFuturesClient:
 
     # ── FID 폴링 시세 (V10 실시간 대체) ──────────────────────────────────────
 
-    def get_quote(self, symbol_code: str) -> Optional[Dict[str, str]]:
+    def get_recent_ticks(self, symbol_code: str, count: int = 5
+                          ) -> Optional[List[Dict[str, str]]]:
         """
-        해외선물 종목의 현재 시세를 FID 1000 으로 조회.
+        해외선물 종목의 최근 틱 시세를 GID 1003 로 조회.
         모의계좌가 V10 실시간을 제공하지 않을 때 폴링 방식으로 대체 사용.
+
+        Returns:
+            [{fid: value}, ...] 최근 tick 리스트 (시간순). 없으면 [], 실패 시 None.
         """
-        return self.api.request_fid(
+        today = datetime.now().strftime("%Y%m%d")
+        return self.api.request_fid_array(
             symbol_code=symbol_code,
             symbol_market=MARKET_OVERSEAS_FUTURES,
-            fid_list=FID_QUOTE_FIELDS,
+            output_fids=FID_TICK_OUTPUT,
+            extra_inputs={
+                "9034": today,        # 시작일
+                "9035": today,        # 종료일
+                "9119": str(count),   # 틱건수 (최근 count 개)
+            },
+            request_count=count,
         )
+
+    def get_quote(self, symbol_code: str) -> Optional[Dict[str, str]]:
+        """
+        최근 tick 리스트에서 가장 최신 tick 만 dict 로 반환 (뒤쪽 호환용).
+        SymbolTrader 는 이 dict 를 소비.
+        """
+        ticks = self.get_recent_ticks(symbol_code, count=1)
+        if ticks is None:
+            return None
+        if not ticks:
+            return {}
+        # 가장 최신(마지막) tick 반환. FID 매핑을 poll_quote 와 호환되게 변환:
+        #   4=종가 → price, 11=누적거래량, 1174=시간(HHMMSS)
+        t = ticks[-1]
+        return {
+            "4":  t.get("4", ""),         # 종가 = 현재가
+            "8":  t.get("1174", ""),      # 시간 (1174 → 8 로 리네이밍)
+            "11": t.get("11", ""),        # 누적거래량
+            "13": t.get("13", ""),        # 시가
+            "14": t.get("14", ""),        # 고가
+            "15": t.get("15", ""),        # 저가
+            "83": t.get("83", ""),        # 체결량 (tick volume)
+            "1173": t.get("1173", ""),    # 일자
+        }
 
     def subscribe_tick(self, symbol: str) -> bool:
         if symbol in self._subscribed_ticks:
