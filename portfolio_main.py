@@ -82,6 +82,7 @@ class PortfolioEngine:
         # "external" : Yahoo Finance 만 (모의계좌 대안)
         # "auto" : 하나 FID 우선 시도, 빈값이면 Yahoo 폴백 (권장)
         self.quote_source = exec_cfg.get("quote_source", "auto").lower()
+        self.history_bars_days = int(exec_cfg.get("history_bars_days", 60))
         self._ext_quote = YahooQuoteClient()
 
         # 종목별 트레이더
@@ -140,10 +141,23 @@ class PortfolioEngine:
         # 3) 매매 클라이언트 준비 (비밀번호 암호화)
         self.client.prepare()
 
-        # 4) 종목별 초기화 (실시간 구독 + 포지션 복원)
+        # 4) 종목별 초기화 (실시간 구독 + 포지션 복원 + 과거 봉 웜업)
         for t in self.traders:
             t.setup()
             self._route[t.quote_symbol] = t
+            if self.history_bars_days > 0:
+                try:
+                    hist = self._ext_quote.get_history_bars(
+                        t.quote_symbol, days=self.history_bars_days,
+                    )
+                    if hist:
+                        t.preload_history(hist)
+                    else:
+                        logger.warning(f"[{t.quote_symbol}] 과거 봉 로드 실패 — "
+                                       f"라이브 누적으로만 웜업 (25일 소요)")
+                except Exception as e:
+                    logger.error(f"[{t.quote_symbol}] 과거 봉 로드 오류: {e}",
+                                 exc_info=True)
 
         # 5) 주문체결 통보 구독
         self.client.subscribe_execution()

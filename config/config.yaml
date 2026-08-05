@@ -116,6 +116,11 @@ execution:
   # 자동으로 하나 시세를 쓰게 됨.
   quote_source: "auto"
 
+  # 봇 시작 시 Yahoo v8 chart 로 과거 일봉을 불러와 전략을 즉시 웜업.
+  # 0 이면 비활성 (라이브 누적으로만 웜업 → 25일 소요).
+  # 60 이면 최근 60일봉 로드 → 오늘 자정 지나면 바로 첫 신호 가능.
+  history_bars_days: 60
+
 logging:
   level: "INFO"
   log_dir: "logs"

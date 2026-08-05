@@ -21,6 +21,7 @@ from api.hana_api import (
     HanaOpenAPI, HanaFuturesClient, ensure_qapp,
     LOGIN_MODE_OVERSEAS_MOCK, LOGIN_MODE_DOMESTIC_OVERSEAS_LIVE,
 )
+from api.external_quote import YahooQuoteClient
 from risk.risk_manager import RiskManager, SymbolSpec
 from strategy.factory import create_strategy
 from engine.symbol_trader import SymbolTrader
@@ -84,6 +85,8 @@ class TradingEngine:
             quote_code=sym_cfg.get("quote_code", ""),
         )
         self.poll_interval_sec = int(exec_cfg.get("quote_polling_interval_sec", 30))
+        self.history_bars_days = int(exec_cfg.get("history_bars_days", 60))
+        self._ext_quote = YahooQuoteClient()
         self._quote_timer = None
 
     def start(self):
@@ -109,6 +112,18 @@ class TradingEngine:
 
         self.client.prepare()
         self.trader.setup()
+
+        # 과거 일봉 웜업
+        if self.history_bars_days > 0:
+            try:
+                hist = self._ext_quote.get_history_bars(
+                    self.trader.quote_symbol, days=self.history_bars_days,
+                )
+                if hist:
+                    self.trader.preload_history(hist)
+            except Exception as e:
+                logger.error(f"과거 봉 로드 오류: {e}", exc_info=True)
+
         self.client.subscribe_execution()
 
         if self.poll_interval_sec > 0:

@@ -185,3 +185,71 @@ class YahooQuoteClient:
     # 하위호환 (예전 이름)
     def get_raw(self, y_sym: str):
         return None
+
+    # ── 과거 일봉 로드 (전략 웜업용) ─────────────────────────────────────────
+
+    def get_history_bars(self, hana_symbol: str, days: int = 60) -> list:
+        """
+        Yahoo v8 chart 로 과거 N일봉 로드.
+        Returns: List[OHLCVBar] (오래된 → 최신 순, 최대 days 개)
+
+        Yahoo 는 근월물 시세라 하나 원월물(Z26)과 정확히 일치하진 않지만
+        전략 웜업에는 충분 (돈치안 채널·이평선·ATR 등 계산 기반).
+        """
+        from utils.data_handler import OHLCVBar
+
+        y_sym = _HANA_TO_YAHOO.get(base_symbol(hana_symbol))
+        if not y_sym:
+            logger.warning(f"[history] {hana_symbol} → Yahoo 심볼 매핑 없음")
+            return []
+
+        # days → Yahoo range 문자열
+        if days <= 30:
+            range_ = "1mo"
+        elif days <= 90:
+            range_ = "3mo"
+        elif days <= 180:
+            range_ = "6mo"
+        elif days <= 365:
+            range_ = "1y"
+        else:
+            range_ = "2y"
+
+        url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
+               f"{urllib.parse.quote(y_sym)}?range={range_}&interval=1d")
+        body = _http_get(url, self.timeout)
+        if not body:
+            return []
+
+        try:
+            data = json.loads(body)
+            result = data.get("chart", {}).get("result") or []
+            if not result:
+                return []
+            r = result[0]
+            timestamps = r.get("timestamp") or []
+            quote = (r.get("indicators", {}).get("quote") or [{}])[0]
+            opens = quote.get("open") or []
+            highs = quote.get("high") or []
+            lows = quote.get("low") or []
+            closes = quote.get("close") or []
+            volumes = quote.get("volume") or []
+
+            bars = []
+            for i in range(len(timestamps)):
+                if i >= len(closes) or closes[i] is None or opens[i] is None:
+                    continue
+                bars.append(OHLCVBar(
+                    datetime.fromtimestamp(timestamps[i]),
+                    float(opens[i]),
+                    float(highs[i]) if highs[i] is not None else float(opens[i]),
+                    float(lows[i]) if lows[i] is not None else float(opens[i]),
+                    float(closes[i]),
+                    float(volumes[i] or 0) if i < len(volumes) else 0.0,
+                ))
+            bars = bars[-days:]
+            logger.info(f"[history] {hana_symbol}({y_sym}) 과거 {len(bars)}봉 로드")
+            return bars
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.warning(f"[history] Yahoo 파싱 오류 {hana_symbol}: {e}")
+            return []

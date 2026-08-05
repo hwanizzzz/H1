@@ -101,6 +101,18 @@ class SymbolTrader:
         # 기존 포지션 복원
         self._sync_position()
 
+    def preload_history(self, bars):
+        """PortfolioEngine 이 외부에서 받아온 과거 일봉을 데이터 핸들러에 적재.
+        add_bar 는 on_bar_closed 콜백을 호출하지 않으므로 전략이 오작동 없이
+        웜업된다."""
+        n = 0
+        for b in bars:
+            self.data.add_bar(b)
+            n += 1
+        if n:
+            logger.info(f"[{self.order_symbol}] 과거 {n}봉 웜업 완료 "
+                        f"(총 {self.data.bar_count()}봉)")
+
     def _sync_position(self):
         """API 포지션 조회 → 내부 상태 반영."""
         positions = self.client.get_positions()
