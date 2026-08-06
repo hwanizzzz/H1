@@ -768,10 +768,12 @@ if _QT_AVAILABLE:
                 loop.quit()
 
         def _slot_agent_event(self, event_type, param, str_param):
-            logger.info(f"AgentEvent type={event_type} param={param} str={str_param}")
+            # CP949 mojibake 복원
+            decoded = _decode_cp949_mojibake(str(str_param))
+            logger.info(f"AgentEvent type={event_type} param={param} str={decoded}")
             if self.on_agent_event:
                 try:
-                    self.on_agent_event(int(event_type), int(param), str(str_param))
+                    self.on_agent_event(int(event_type), int(param), decoded)
                 except Exception as e:
                     logger.error(f"on_agent_event 콜백 오류: {e}", exc_info=True)
 
@@ -814,6 +816,28 @@ def _safe_int(s, default: int = 0) -> int:
         return int(_safe_float(s, default))
     except (ValueError, TypeError):
         return default
+
+
+def _decode_cp949_mojibake(s: str) -> str:
+    """
+    하나 OCX 가 CP949 바이트를 QString/BSTR 로 감싸서 반환할 때
+    발생하는 mojibake 를 원문 한글로 복원 시도. 이미 정상이면 그대로.
+
+    예: 'Áö±Ý [ǁ ª¿øÅ¥ÆÁ»ý(¾Èµå·ÎÀµå)]'  → '지금 [원큐 앱스(안드로이드)]'
+    """
+    if not s:
+        return s
+    # 이미 한글이 있으면 그대로 (mojibake 아님)
+    if any("가" <= c <= "힣" for c in s):
+        return s
+    try:
+        recovered = s.encode("latin-1", errors="replace").decode("cp949", errors="replace")
+        # 복원 결과에 한글이 있으면 복원본 반환
+        if any("가" <= c <= "힣" for c in recovered):
+            return recovered
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    return s
 
 
 class HanaFuturesClient:

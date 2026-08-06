@@ -256,6 +256,7 @@ class PortfolioEngine:
 
     def _on_agent_event(self, event_type: int, param: int, str_param: str):
         # 100번대: 통신 이벤트(접속/해제), 150번대: 공지
+        # str_param 은 이미 hana_api._decode_cp949_mojibake 로 복원된 상태
         if event_type >= 100 and event_type < 150:
             logger.warning(f"통신 이벤트 type={event_type}: {str_param}")
         elif event_type >= 150:
