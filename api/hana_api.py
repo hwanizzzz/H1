@@ -984,13 +984,17 @@ class HanaFuturesClient:
                 ("OTS5901U01_in", {
                     "CTNO": self.ctno, "APNO": self.apno, "PWD": self._pw_enc,
                     "PRDT_CD": symbol,
+                    # SELL_BUY_DCD: B=매수 / S=매도 (샘플 FFutOptOrdDlg.cpp:1148)
                     "SELL_BUY_DCD": sell_buy,
                     "PRC_CND_DCD": prc_cnd,
                     "ODRV_ORDR_PRC": prc_str,
                     "ORDR_QNT": str(qty),
                     "STLS_APPN_PRC": stop_str,
-                    "ORDR_HND_DCD": "1", "ORDR_DCD": "1",
-                    "ETC_ORDR_DCD": "", "CNCS_CND_DCD": "1",
+                    # 샘플 FFutOptOrdDlg.cpp 값 그대로:
+                    "ORDR_HND_DCD": "C",     # 주문조작구분(C:일반주문 line 1157)
+                    "ORDR_DCD":     "0",     # 주문구분코드      (line 1158)
+                    "ETC_ORDR_DCD": "",
+                    "CNCS_CND_DCD": "1",     # 체결조건 1:FAS(DAY) (line 1159)
                     "CLR_PST_NO": "", "ORDR_EXPR_DT": "",
                 }),
             ],
