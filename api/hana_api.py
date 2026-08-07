@@ -770,6 +770,13 @@ if _QT_AVAILABLE:
         def _slot_agent_event(self, event_type, param, str_param):
             # CP949 mojibake 복원
             decoded = _decode_cp949_mojibake(str(str_param))
+
+            # 무해한 반복 알림 필터링 (다른 기기·PC 동시 사용으로 인한 알림)
+            # → 로그 지저분해지지 않게 skip. 사용자 요청 기반.
+            NOISE_KEYWORDS = ("중복접속", "다중접속", "동시접속")
+            if any(k in decoded for k in NOISE_KEYWORDS):
+                return   # 조용히 무시
+
             logger.info(f"AgentEvent type={event_type} param={param} str={decoded}")
             if self.on_agent_event:
                 try:
