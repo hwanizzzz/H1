@@ -468,8 +468,16 @@ if _QT_AVAILABLE:
             err_msg = self._tran_msgs.pop(rq_id, "")
             self._cleanup(rq_id)
             if err and err != "0":
-                logger.warning(f"Tran 오류 ({tr_code}) err={err} msg={err_msg!r} "
-                               f"| last={self._last_err()!r}")
+                # 원인 파악에 도움되도록 입력값 요약도 함께 로그
+                input_summary = " / ".join(
+                    f"{k}={list(v.keys())}" for k, v in in_records
+                )
+                logger.warning(
+                    f"Tran 오류 ({tr_code}) err={err}\n"
+                    f"  msg={err_msg!r}\n"
+                    f"  last={self._last_err()!r}\n"
+                    f"  input records={input_summary}"
+                )
             return rows
 
         def _cleanup(self, rq_id: int):
@@ -788,15 +796,17 @@ if _QT_AVAILABLE:
 
         def _get_opt(self, opt_type: int) -> str:
             try:
-                return str(self._call(
+                raw = str(self._call(
                     "GetCommRecvOptionValue(int)", opt_type,
                 ) or "").strip()
+                return _decode_cp949_mojibake(raw)
             except Exception:
                 return ""
 
         def _last_err(self) -> str:
             try:
-                return str(self._call("GetLastErrMsg()") or "")
+                raw = str(self._call("GetLastErrMsg()") or "")
+                return _decode_cp949_mojibake(raw)
             except Exception:
                 return ""
 
